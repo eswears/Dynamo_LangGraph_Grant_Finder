@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  grant_finder:
+    build: .
+    volumes:
+      - ./src/grant_finder/data:/app/src/grant_finder/data
+      - ./output:/app/output
+      - ./logs:/app/logs
+      - ./.env:/app/.env
+      - ./src/grant_finder/config:/app/src/grant_finder/config
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    stdin_open: true
+    tty: true

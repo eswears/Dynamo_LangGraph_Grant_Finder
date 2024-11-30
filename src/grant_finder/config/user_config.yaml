@@ -1,0 +1,29 @@
+# User Configuration for Grant Finder Crew
+
+# Company context directory configuration
+company_context:
+  directory: "C:/data/IA_company_context"
+
+# Funding sources configuration
+funding_sources:
+  file_path: "C:/data/funding_sources/grant_funding_sources.csv"
+
+# Model configuration
+model:
+  name: "gpt-3.5-turbo-0125"
+  temperature: 0.5
+  request_timeout: 180
+  max_tokens: 500
+  max_retries: 3
+  concurrency_limit: 2
+  backoff_factor: 2
+  min_delay: 1
+
+# Optional Configurations
+output:
+  format: "markdown"
+  save_to_file: true
+  output_directory: "C:/data/grant_finder_output"
+logging:
+  level: "INFO"
+  file: "logs/grant_finder.log"

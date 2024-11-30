@@ -1,0 +1,178 @@
+tasks:
+  extract_company_profile_task:
+    name: "Extract_Company_Profile"
+    description: |
+      Perform a detailed semantic search through all documents to analyze the company's capabilities and experience.
+      
+      You must extract and organize the following information.
+      IMPORTANT: Search thoroughly and combine information from multiple documents.
+      Only mark as "Not found" if absolutely no relevant information exists.
+    expected_output: |
+      Your response must match the CompanyAnalysisOutput model with these fields:
+      - vision (str): Company vision and mission
+      - technical_focus (str): Company's technical focus areas
+      - website (str): Company website URL
+      - sbir_experience (str): Company's SBIR/STTR Program/Project Experience
+      - innovations (str): Key innovations and capabilities
+      - technical_experience (str): Technical experience and past performance
+
+  write_strategic_requirements_task:
+    name: Write_Strategic_Requirements
+    description: >
+      Develop strategic requirements from the material gathered in the search_pdf_task to be used as a set of grant search requirements
+      that align with the company's focus, interests, and technical capabilities.
+
+      CRITICAL REQUIREMENTS:
+      1. Technical Requirements must be SPECIFIC, for example:
+         - NOT: "AI and Machine Learning"
+         - YES: "Deep learning models for predictive maintenance using sensor data"
+         
+      2. Innovation Areas must be DETAILED, for example:
+         - NOT: "Software development"
+         - YES: "Real-time processing of IoT sensor data for predictive analytics"
+         
+      3. Competitive Advantages must be MEASURABLE, for example:
+         - NOT: "Experienced team"
+         - YES: "5+ years experience developing ML models for defense applications"
+         
+      4. Target Phases must be SPECIFIC, for example:
+         - NOT: BAA Cycle
+         - YES: Phase I: Initial R&D feasibility studies
+         - YES: Phase II: Full R&D effort
+         - YES: Direct to Phase II: If prior work demonstrates Phase I feasibility
+      
+      These requirements will be used to match SPECIFIC grant topics that must have:
+      - A specific topic number (e.g., "AF241-D001")
+      - Specific technical requirements
+      - A specific submission deadline
+      - A specific award amount
+      - A direct URL to the specific topic
+      - Aligned with the company's focus, interests, and technical capabilities
+
+      Here's the company high level focus, {company_focus}
+    expected_output: >
+      Strategic requirements summary highlighting company-grant search requirements that can be used to find relevant SBIR/STTR grants.
+    context: 
+      - extract_company_profile_task
+
+  fed_grant_task:
+    name: Federal_Grant_Search
+    description: >
+      Using the provided funding sources and strategic requirements from the previous task to search for
+      relevant federal grant opportunities from their websites. Search each website for grant opportunities
+      and other similar funding sources that can be added to the funding tracker. Ensure that the funding
+      sources are aligned with the strategic requirements, are aligned with the company's focus, and are
+      are specific topics that have topic numbers, detailed technical requirements, submission deadlines,
+      award amounts, and direct URLs. If you find a generic BAA cycle funding source, then you should scrub 
+      it's informaiton to find the specific topic numbers, submission deadlines, award amounts, and direct
+      URLs. Do not report the generic BAA cycle as a funding source, only the specific topics. Here are further 
+      requirements.
+      
+      CRITICAL REQUIREMENTS:
+      1. Each grant opportunity must have:
+         - Specific topic number (e.g., "AF241-D001")
+         - Detailed technical requirements
+         - Submission deadline
+         - Award amount
+         - Direct URL to the specific topic
+         - Clear alignment with company capabilities
+      
+      2. For each opportunity, provide:
+         - Technical alignment analysis
+         - Capability match assessment
+         - Innovation potential evaluation
+         - Competition level estimate
+         - Success probability rating
+      
+      3. Search Process:
+         - Start with primary SBIR/STTR sources
+         - Expand to related opportunities
+         - Look for complementary programs
+         - Consider multiple agencies
+         
+      4. Evaluation Criteria:
+         - Technical fit with company expertise
+         - Innovation potential
+         - Award size and phase
+         - Timeline alignment
+         - Past success rates
+    expected_output: >
+      Detailed analysis of each relevant grant opportunity found match the pydantic model schema, which should include
+      the following information:
+      1. Topic Details:
+         - Topic ID and title
+         - Agency and program
+         - Submission deadline
+         - Award amount and duration
+         
+      2. Technical Analysis:
+         - Key technical requirements
+         - Alignment with company capabilities
+         - Innovation opportunities
+         - Technical risks and mitigations
+         
+      3. Strategic Fit:
+         - Market potential
+         - Competition assessment
+         - Success probability
+         - Strategic value
+         
+      4. Action Items:
+         - Required capabilities
+         - Technical gaps
+         - Partnership needs
+         - Next steps
+
+  federal_grant_report_task:
+    name: "Grant_Analysis_Report"
+    description: >
+      Create a comprehensive analysis report of the identified grant opportunities.
+      
+      REPORT REQUIREMENTS:
+      1. Executive Summary:
+         - Overview of opportunities
+         - Key findings and recommendations
+         - Strategic priorities
+         
+      2. Opportunity Analysis:
+         - Detailed grant breakdowns
+         - Technical alignment assessment
+         - Risk/reward evaluation
+         - Timeline considerations
+         
+      3. Strategic Recommendations:
+         - Prioritized opportunities
+         - Resource requirements
+         - Technical preparation needs
+         - Partnership strategies
+         
+      4. Action Plan:
+         - Near-term actions
+         - Required preparations
+         - Timeline and milestones
+         - Resource allocation
+    expected_output: >
+      A comprehensive report including:
+      1. Executive Summary
+         - Key opportunities
+         - Strategic recommendations
+         - Critical findings
+         
+      2. Detailed Opportunity Analysis
+         - Technical requirements
+         - Alignment assessment
+         - Risk evaluation
+         - Timeline analysis
+         
+      3. Strategic Recommendations
+         - Prioritized actions
+         - Resource needs
+         - Partnership requirements
+         - Technical preparations
+         
+      4. Implementation Plan
+         - Immediate next steps
+         - Timeline and milestones
+         - Resource allocation
+         - Success metrics
+
