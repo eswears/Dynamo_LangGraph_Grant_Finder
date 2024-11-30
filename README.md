@@ -115,7 +115,57 @@ graph TD
     APP --> TRACES
 ```
 
-### Component Details
+
+### LangGraph Workflow
+```mermaid
+graph TD
+    subgraph "LangGraph Workflow"
+        AP[Profile Analysis Node]
+        SD[Strategy Development Node]
+        GS[Grant Search Node]
+        FR[Final Report Node]
+    end
+ 
+    AP --> SD
+    SD --> GS
+    GS --> FR
+ 
+    subgraph "Node Details"
+        AP_D[["- Company document analysis<br/>- Capability extraction<br/>- Experience assessment"]]
+        SD_D[["- Search requirement development<br/>- Innovation area identification<br/>- Strategic focus planning"]]
+        GS_D[["- Multi-source grant search<br/>- Opportunity validation<br/>- Alignment scoring"]]
+        FR_D[["- Comprehensive analysis<br/>- Strategic recommendations<br/>- Action plan development"]]
+    end
+    
+    AP --- AP_D
+    SD --- SD_D
+    GS --- GS_D
+    FR --- FR_D
+```
+
+The LangGraph workflow consists of four main nodes that process information sequentially:
+
+1. **Profile Analysis Node**
+    - Analyzes company documents
+    - Extracts capabilities and experience
+    - Builds comprehensive company profile
+
+2. **Strategy Development Node**
+    - Develops search requirements
+    - Identifies innovation areas
+    - Plans strategic focus
+
+3. **Grant Search Node**
+    - Searches multiple funding sources
+    - Validates opportunities
+    - Scores alignment with requirements
+
+4. **Final Report Node**
+    - Analyzes opportunities
+    - Generates recommendations
+    - Develops action plans
+ 
+Each node maintains its own state and passes processed information to the next node in the workflow.
 
 #### Core Components
 - **LangGraph Workflow Engine**: Orchestrates the multi-agent workflow
