@@ -123,23 +123,28 @@ graph TD
         AP[Profile Analysis Node]
         SD[Strategy Development Node]
         GS[Grant Search Node]
+        QC[Quality Check Node]
         FR[Final Report Node]
     end
  
     AP --> SD
     SD --> GS
-    GS --> FR
+    GS --> QC
+    QC -->|"Quality Met"| FR
+    QC -->|"Needs Refinement"| GS
  
     subgraph "Node Details"
         AP_D["Company Document Analysis|Capability Extraction|Experience Assessment"]
         SD_D["Search Requirement Development|Innovation Area Identification|Strategic Focus Planning"]
         GS_D["Multi-source Grant Search|Opportunity Validation|Alignment Scoring"]
+        QC_D["Result Quality Analysis|Gap Identification|Search Refinement"]
         FR_D["Comprehensive Analysis|Strategic Recommendations|Action Plan Development"]
     end
     
     AP --- AP_D
     SD --- SD_D
     GS --- GS_D
+    QC --- QC_D
     FR --- FR_D
 ```
 

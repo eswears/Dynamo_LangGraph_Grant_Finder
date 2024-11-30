@@ -303,6 +303,79 @@ class FinalReportNode:
             state.errors.append(f"Report generation error: {str(e)}")
             return state
 
+class QualityCheckNode:
+    """Evaluates search result quality and triggers refinement if needed"""
+    
+    def __init__(
+        self,
+        logger: logging.Logger,
+        llm: ChatOpenAI,
+        min_opportunities: int = 5,
+        min_alignment_score: float = 70.0,
+        max_iterations: int = 3
+    ):
+        self.logger = logger
+        self.min_opportunities = min_opportunities
+        self.min_alignment_score = min_alignment_score
+        self.max_iterations = max_iterations
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert at evaluating grant search results and identifying gaps in coverage."),
+            ("user", "{input}")
+        ])
+        
+        agent = create_openai_tools_agent(llm, [], prompt)
+        self.executor = AgentExecutor(agent=agent, tools=[])
+    
+    def __call__(self, state: GrantFinderState) -> Tuple[str, GrantFinderState]:
+        try:
+            self.logger.info("Evaluating search result quality")
+            
+            # Check basic metrics
+            if len(state.grant_opportunities) < self.min_opportunities:
+                self.logger.info("Insufficient number of opportunities found")
+                return "refine_search", state
+                
+            high_quality_opps = [
+                opp for opp in state.grant_opportunities 
+                if opp.alignment_score >= self.min_alignment_score
+            ]
+            
+            if len(high_quality_opps) < self.min_opportunities:
+                self.logger.info("Insufficient high-quality opportunities")
+                return "refine_search", state
+            
+            # Analyze coverage and gaps
+            analysis_input = {
+                "opportunities": state.grant_opportunities,
+                "search_requirements": state.search_requirements,
+                "company_profile": state.company_profile,
+                "iteration": state.get("search_iterations", 0)
+            }
+            
+            result = self.executor.invoke({
+                "input": f"Analyze search result coverage and identify gaps: {analysis_input}"
+            })
+            
+            # Check if refinement needed
+            if (result.get("has_gaps", True) and 
+                state.get("search_iterations", 0) < self.max_iterations):
+                
+                # Update search requirements based on analysis
+                state.search_requirements.update(result.get("refinements", {}))
+                state.search_iterations = state.get("search_iterations", 0) + 1
+                
+                self.logger.info("Search refinement needed - updating requirements")
+                return "refine_search", state
+            
+            self.logger.info("Search results meet quality criteria")
+            return "complete", state
+            
+        except Exception as e:
+            self.logger.error(f"Quality check failed: {str(e)}")
+            state.errors.append(f"Quality check error: {str(e)}")
+            return "complete", state
+
 def build_graph(
     company_context_path: str,
     funding_sources_path: str,
@@ -317,6 +390,7 @@ def build_graph(
     profile_node = ProfileAnalysisNode(company_context_path, logger, llm)
     strategy_node = StrategyDevelopmentNode(logger, llm)
     search_node = GrantSearchNode(funding_sources_path, logger, llm, api_key)
+    quality_node = QualityCheckNode(logger, llm)
     report_node = FinalReportNode(logger, llm, output_dir)
     
     # Create graph
@@ -326,11 +400,21 @@ def build_graph(
     workflow.add_node("analyze_profile", profile_node)
     workflow.add_node("develop_strategy", strategy_node)
     workflow.add_node("search_grants", search_node)
+    workflow.add_node("check_quality", quality_node)
     workflow.add_node("generate_report", report_node)
     
     # Add edges
     workflow.add_edge("analyze_profile", "develop_strategy")
     workflow.add_edge("develop_strategy", "search_grants")
-    workflow.add_edge("search_grants", "generate_report")
+    workflow.add_edge("search_grants", "check_quality")
+    
+    # Add conditional edges from quality check
+    workflow.add_conditional_edges(
+       "check_quality",
+       {
+           "refine_search": "search_grants",
+           "complete": "generate_report"
+       }
+   )
     
     return workflow
