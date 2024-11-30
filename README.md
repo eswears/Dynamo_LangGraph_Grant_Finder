@@ -131,10 +131,10 @@ graph TD
     GS --> FR
  
     subgraph "Node Details"
-        AP_D[["- Company document analysis<br/>- Capability extraction<br/>- Experience assessment"]]
-        SD_D[["- Search requirement development<br/>- Innovation area identification<br/>- Strategic focus planning"]]
-        GS_D[["- Multi-source grant search<br/>- Opportunity validation<br/>- Alignment scoring"]]
-        FR_D[["- Comprehensive analysis<br/>- Strategic recommendations<br/>- Action plan development"]]
+        AP_D["Company Document Analysis|Capability Extraction|Experience Assessment"]
+        SD_D["Search Requirement Development|Innovation Area Identification|Strategic Focus Planning"]
+        GS_D["Multi-source Grant Search|Opportunity Validation|Alignment Scoring"]
+        FR_D["Comprehensive Analysis|Strategic Recommendations|Action Plan Development"]
     end
     
     AP --- AP_D
