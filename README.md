@@ -1,70 +1,20 @@
 # Grant Finder
 
-A LangGraph-based AI system that helps organizations find and analyze grant opportunities by understanding company capabilities and matching them with relevant funding sources.
+A sophisticated LangGraph-based AI system that helps organizations find, analyze, and strategically plan for grant opportunities by understanding company capabilities and matching them with relevant funding sources.
 
 ## Overview
 
-Grant Finder uses a sophisticated multi-agent workflow powered by LangGraph to:
+Grant Finder uses an advanced multi-agent workflow powered by LangGraph to:
 1. Analyze company documentation to understand capabilities and experience
 2. Develop strategic search requirements
-3. Search and analyze grant opportunities from multiple sources
-4. Generate comprehensive analysis reports
+3. Search and analyze grant opportunities from multiple sources with retry mechanisms
+4. Perform quality checks and gap analysis
+5. Develop strategic pursuit plans
+6. Generate comprehensive analysis reports
 
-## Features
+## System Architecture
 
-- Company profile analysis from documents
-- Strategic requirements development
-- Automated grant opportunity search
-- Comprehensive grant analysis and reporting
-- Multi-agent workflow using LangGraph
-- Extensive logging and validation
-
-## Architecture
-
-### Solution Architecture
-```mermaid
-graph TD
-    subgraph "User Interface"
-        CLI[Command Line Interface]
-        API[API Interface]
-    end
-
-    subgraph "Core Engine"
-        WF[LangGraph Workflow]
-        DS[Document Store]
-        GS[Grant Search]
-        RM[Report Manager]
-    end
-
-    subgraph "State Management"
-        SM[State Manager]
-        CM[Cache Manager]
-        VM[Validation Manager]
-    end
-
-    subgraph "Storage"
-        VDB[(Vector DB)]
-        CD[(Company Docs)]
-        FST[(Funding Sources)]
-        CR[(Result Cache)]
-    end
-
-    CLI --> WF
-    API --> WF
-    WF --> DS
-    WF --> GS
-    WF --> RM
-    DS --> VDB
-    DS --> CD
-    GS --> FST
-    GS --> CR
-    
-    SM --> WF
-    CM --> GS
-    VM --> WF
-```
-
-### System Architecture
+### Service Architecture
 ```mermaid
 graph TD
     subgraph "Application Layer"
@@ -89,7 +39,7 @@ graph TD
         
         subgraph "Storage"
             FS[File Storage]
-            DB[(Database)]
+            DB[(Document Store)]
         end
         
         subgraph "Monitoring"
@@ -115,302 +65,417 @@ graph TD
     APP --> TRACES
 ```
 
+### Infrastructure Requirements
 
-### LangGraph Workflow
-```mermaid
-graph TD
-    subgraph "LangGraph Workflow"
-        AP[Profile Analysis Node]
-        SD[Strategy Development Node]
-        GS[Grant Search Node]
-        QC[Quality Check Node]
-        FR[Final Report Node]
-    end
- 
-    AP --> SD
-    SD --> GS
-    GS --> QC
-    QC -->|"Quality Met"| FR
-    QC -->|"Needs Refinement"| GS
- 
-    subgraph "Node Details"
-        AP_D["Company Document Analysis|Capability Extraction|Experience Assessment"]
-        SD_D["Search Requirement Development|Innovation Area Identification|Strategic Focus Planning"]
-        GS_D["Multi-source Grant Search|Opportunity Validation|Alignment Scoring"]
-        QC_D["Result Quality Analysis|Gap Identification|Search Refinement"]
-        FR_D["Comprehensive Analysis|Strategic Recommendations|Action Plan Development"]
-    end
-    
-    AP --- AP_D
-    SD --- SD_D
-    GS --- GS_D
-    QC --- QC_D
-    FR --- FR_D
-```
+1. **Compute Resources**
+   - Application Server: 
+     - CPU: 4+ cores
+     - RAM: 16GB+
+     - Storage: 100GB+ SSD
+   - Workers:
+     - CPU: 2+ cores per worker
+     - RAM: 8GB+ per worker
+     - Count: Based on concurrent searches
 
-The LangGraph workflow consists of four main nodes that process information sequentially:
-
-1. **Profile Analysis Node**
-    - Analyzes company documents
-    - Extracts capabilities and experience
-    - Builds comprehensive company profile
-
-2. **Strategy Development Node**
-    - Develops search requirements
-    - Identifies innovation areas
-    - Plans strategic focus
-
-3. **Grant Search Node**
-    - Searches multiple funding sources
-    - Validates opportunities
-    - Scores alignment with requirements
-
-4. **Final Report Node**
-    - Analyzes opportunities
-    - Generates recommendations
-    - Develops action plans
- 
-Each node maintains its own state and passes processed information to the next node in the workflow.
-
-#### Core Components
-- **LangGraph Workflow Engine**: Orchestrates the multi-agent workflow
-- **Document Store**: Manages document processing and retrieval
-- **Grant Search Engine**: Handles multi-source opportunity discovery
-- **State Manager**: Maintains workflow state and transitions
-
-#### External Services
-- **LangChain**: Framework for LLM interactions
-- **LangGraph**: Graph-based workflow engine
-- **LangSmith**: Monitoring and observability
-- **OpenAI API**: Language model services
-- **SerpAPI**: Web search integration
-
-#### Infrastructure Requirements
-
-1. **Compute Resources**:
-   - Application Server: 4+ CPUs, 16GB+ RAM
-   - Workers: 2+ CPUs, 8GB+ RAM per worker
-   - GPU (Optional): For local embeddings
-
-2. **Storage**:
+2. **Storage Resources**
    - Document Store: 100GB+ SSD
    - Vector DB: 50GB+ SSD
    - Cache: 10GB+ Memory
+   - Logs: 50GB+ rotated storage
 
-3. **External Service Dependencies**:
-   - OpenAI API account
-   - SerpAPI key
-   - LangSmith account (optional)
+3. **Network Requirements**
+   - Bandwidth: 100Mbps+
+   - Low latency connections
+   - Public endpoints for APIs
+   - Internal service mesh
+
+### External Service Dependencies
+
+1. **OpenAI API**
+   - Purpose: LLM operations
+   - Requirements:
+     - API key
+     - Rate limits configuration
+     - Error handling setup
+     - Retry mechanisms
+
+2. **SerpAPI**
+   - Purpose: Web search operations
+   - Requirements:
+     - API key
+     - Search quota management
+     - Result parsing setup
+
+3. **LangSmith (Optional)**
+   - Purpose: Monitoring and debugging
+   - Requirements:
+     - API key
+     - Project setup
+     - Trace configuration
 
 ## Initial Setup
 
-1. Install Poetry (if not already installed):
+1. **System Prerequisites**
 ```bash
+# Install system dependencies
+sudo apt-get update && sudo apt-get install -y \
+    python3.9 \
+    python3.9-dev \
+    python3-pip \
+    git \
+    redis-server \
+    docker \
+    docker-compose
+
+# Install Poetry
 curl -sSL https://install.python-poetry.org | python3 -
 ```
 
-2. Clone and initialize the project:
+2. **Project Initialization**
 ```bash
 # Clone repository
 git clone https://github.com/yourusername/grant_finder
 cd grant_finder
 
-# Install dependencies with Poetry
+# Configure Poetry
+poetry config virtualenvs.in-project true
+
+# Install dependencies
 poetry install
 
-# Create necessary directories and config files
+# Create necessary directories
 poetry run python -c "
 import os
 from pathlib import Path
 
-# Create directories
 dirs = [
     'src/grant_finder/data/company_docs',
     'src/grant_finder/data/funding_sources',
     'logs',
-    'output'
+    'output',
+    'cache'
 ]
+
 for d in dirs:
     Path(d).mkdir(parents=True, exist_ok=True)
-
-# Copy example files if they don't exist
-examples = {
-    '.env.example': '.env',
-    'src/grant_finder/config/user_config.yaml.example': 'src/grant_finder/config/user_config.yaml',
-    'src/grant_finder/data/funding_sources/sources.csv.example': 'src/grant_finder/data/funding_sources/sources.csv'
-}
-for src, dst in examples.items():
-    if not Path(dst).exists() and Path(src).exists():
-        Path(dst).write_text(Path(src).read_text())
 "
 ```
 
-## Configuration
-
-1. Configure your environment:
+3. **Configuration Setup**
 ```bash
-# Edit .env with your API keys
+# Copy example files
+cp .env.example .env
+cp config/user_config.yaml.example config/user_config.yaml
+
+# Update .env with your API keys
 vim .env
 
-# Edit configuration
-vim src/grant_finder/config/user_config.yaml
-
-# Edit funding sources
-vim src/grant_finder/data/funding_sources/sources.csv
+# Configure user settings
+vim config/user_config.yaml
 ```
 
-## Usage
+## Deployment
 
-### Basic Usage
-```python
-from grant_finder.main import main
+### Docker Deployment
 
-if __name__ == "__main__":
-    main()
-```
-
-### Custom Search
-```python
-from grant_finder import run_grant_search
-
-results = run_grant_search(
-    company_focus="AI and Machine Learning",
-    organization_focus="DoD",
-    company_context_path="path/to/docs",
-    funding_sources_path="path/to/sources.csv",
-    output_dir="path/to/output"
-)
-```
-
-## Development
-
-### Local Development
+1. **Build Image**
 ```bash
-# Activate virtual environment
+# Build using docker-compose
+docker-compose build
+```
+
+2. **Configure Environment**
+```bash
+# Copy environment file
+cp .env.example .env
+
+# Edit environment variables
+vim .env
+```
+
+3. **Run Services**
+```bash
+# Start all services
+docker-compose up -d
+
+# Scale workers if needed
+docker-compose up -d --scale worker=3
+```
+
+### Manual Deployment
+
+1. **Create Python Environment**
+```bash
+# Create virtual environment
 poetry shell
 
-# Run tests
-poetry run pytest
+# Install project
+poetry install
+```
 
-# Run the application
+2. **Configure Services**
+```bash
+# Start Redis
+systemctl start redis
+
+# Configure logging
+mkdir -p /var/log/grant_finder
+chown -R grant_finder:grant_finder /var/log/grant_finder
+```
+
+3. **Start Application**
+```bash
+# Run with Poetry
 poetry run python -m grant_finder.main
 
-# Install development dependencies
-pip install -e ".[dev]"
-```
-
-### Docker Development
-
-1. Build and run with Docker Compose:
-```bash
-# Build the container
-docker-compose build
-
-# Run the container
-docker-compose up
-
-# Run in background
-docker-compose up -d
-```
-
-2. Execute commands in container:
-```bash
-# Run tests in container
-docker-compose run grant_finder poetry run pytest
-
-# Run application in container
-docker-compose run grant_finder poetry run python -m grant_finder.main
-
-# Open shell in container
-docker-compose run grant_finder /bin/bash
-```
-
-### Development Tools
-```bash
-# Format code
-poetry run black .
-
-# Sort imports
-poetry run isort .
-
-# Run linter
-poetry run ruff check .
-
-# Run all quality checks
-poetry run pre-commit run --all-files
+# Or use systemd service
+sudo systemctl start grant_finder
 ```
 
 ## Testing
 
-The project uses pytest for automated testing. Here are the key testing commands:
+### Test Categories
 
-### Basic Testing
+1. **Unit Tests**
 ```bash
-# Run all tests
-pytest
+# Run unit tests
+pytest tests/unit/
 
-# Run with verbose output (-v)
-pytest -v
-
-# Show print statements (-s)
-pytest -s
-
-# Run specific test file
-pytest tests/test_main.py
-
-# Run specific test function
-pytest tests/test_main.py::test_successful_execution
+# Test specific module
+pytest tests/unit/test_nodes.py
 ```
 
-### Advanced Testing Options
+2. **Integration Tests**
+```bash
+# Run integration tests
+pytest tests/integration/
+
+# Test with external services
+pytest tests/integration/test_search.py
+```
+
+3. **System Tests**
+```bash
+# Run full system tests
+pytest tests/system/
+
+# Test specific workflow
+pytest tests/system/test_workflow.py
+```
+
+### Test Coverage
+
 ```bash
 # Generate coverage report
-pytest --cov=grant_finder
-
-# Detailed coverage report
 pytest --cov=grant_finder --cov-report=html
 
-# Stop on first failure
-pytest -x
-
-# Show locals in tracebacks
-pytest --showlocals
-
-# Run marked tests
-pytest -m slow  # Runs tests marked with @pytest.mark.slow
+# View report
+open htmlcov/index.html
 ```
 
-### Test Categories
-- Unit Tests: `pytest tests/test_types.py`
-- Integration Tests: `pytest tests/test_main.py`
-- Tool Tests: `pytest tests/test_tools.py`
-- Node Tests: `pytest tests/test_nodes.py`
+### Performance Testing
 
-### Testing During Development
 ```bash
-# Run tests with auto-reload
-pytest-watch
+# Run performance tests
+pytest tests/performance/test_search_performance.py
 
-# Run tests with specific markers
-pytest -v -m "not slow"
+# Profile code
+python -m cProfile -o output.prof grant_finder/main.py
 ```
 
-## Example Usage
+### Load Testing
 
-See the `examples/` directory for:
-- Basic search implementation
-- Custom tool integration
-- Advanced configuration
+```bash
+# Install locust
+poetry add locust
 
-## Troubleshooting
+# Run load tests
+locust -f tests/load/locustfile.py
+```
 
-If tests fail:
-1. Check environment variables are set
-2. Verify configuration files exist
-3. Review test logs in `logs/`
-4. Run tests with `-v` flag for detailed output
-5. Use `--pdb` flag to debug failing tests
+## Monitoring
+
+### Logging Setup
+
+1. **Configure Logging**
+```yaml
+# logging_config.yaml
+version: 1
+formatters:
+  standard:
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: standard
+    stream: ext://sys.stdout
+  file:
+    class: logging.handlers.RotatingFileHandler
+    formatter: standard
+    filename: logs/grant_finder.log
+    maxBytes: 10485760
+    backupCount: 5
+root:
+  level: INFO
+  handlers: [console, file]
+```
+
+2. **Metrics Collection**
+```python
+# Example metrics configuration
+from prometheus_client import Counter, Histogram
+
+SEARCH_REQUESTS = Counter(
+    'grant_search_requests_total',
+    'Total number of grant searches'
+)
+
+SEARCH_DURATION = Histogram(
+    'grant_search_duration_seconds',
+    'Time spent processing searches'
+)
+```
+
+### Monitoring Dashboard
+
+1. **Grafana Setup**
+```yaml
+# docker-compose.monitoring.yml
+version: '3.8'
+services:
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+```
+
+2. **Dashboard Configuration**
+```json
+{
+  "dashboard": {
+    "panels": [
+      {
+        "title": "Search Success Rate",
+        "type": "graph",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "rate(grant_search_success_total[5m])"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+## Maintenance
+
+### Backup Procedures
+
+```bash
+# Backup vector database
+rsync -av /path/to/faiss/index /backup/location/
+
+# Backup configuration
+cp -r config/ /backup/location/
+
+# Backup logs
+tar czf backup_logs.tar.gz logs/
+```
+
+### Update Procedures
+
+```bash
+# Update dependencies
+poetry update
+
+# Apply migrations
+poetry run python -m grant_finder.db.migrate
+
+# Rebuild indexes
+poetry run python -m grant_finder.tools.rebuild_index
+```
+
+## Troubleshooting Guide
+
+### Common Issues
+
+1. **Search Failures**
+   - Check API rate limits
+   - Verify network connectivity
+   - Review error logs
+   - Check source availability
+
+2. **Performance Issues**
+   - Monitor resource usage
+   - Check cache hit rates
+   - Review concurrent operations
+   - Analyze query patterns
+
+3. **Integration Issues**
+   - Verify API credentials
+   - Check service endpoints
+   - Review network rules
+   - Validate data formats
+
+### Debug Tools
+
+```bash
+# Enable debug logging
+export LOG_LEVEL=DEBUG
+
+# Run with profiling
+python -m cProfile grant_finder/main.py
+
+# Check service status
+systemctl status grant_finder
+systemctl status redis
+
+# View logs
+tail -f logs/grant_finder.log
+```
+
+## Security
+
+### API Security
+
+1. **Authentication**
+   - API key management
+   - Token validation
+   - Rate limiting
+   - Access control
+
+2. **Data Protection**
+   - Encryption at rest
+   - Secure transmission
+   - Data sanitization
+   - Access logging
+
+### Configuration Security
+
+```yaml
+security:
+  api_key_rotation: 30  # days
+  rate_limit:
+    requests: 100
+    period: 3600  # seconds
+  ssl:
+    enabled: true
+    cert_path: "/etc/ssl/certs/grant_finder.pem"
+```
 
 ## License
 
 MIT License
+
+See 'LICENSE' for full text.

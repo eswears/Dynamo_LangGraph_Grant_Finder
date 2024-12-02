@@ -123,6 +123,128 @@ tasks:
          - Partnership needs
          - Next steps
 
+  quality_check_task:
+    name: "Quality_Check"
+    description: >
+      Analyze the grant search results for completeness and quality.
+      
+      EVALUATION CRITERIA:
+      1. Quantity Requirements:
+         - Minimum number of opportunities
+         - Sufficient high-alignment matches
+         - Diverse funding sources
+         
+      2. Quality Requirements:
+         - Technical requirement coverage
+         - Innovation area alignment
+         - Award size distribution
+         - Timeline feasibility
+         
+      3. Gap Analysis:
+         - Missing technical areas
+         - Underrepresented focus areas
+         - Timeline gaps
+         - Award size gaps
+    expected_output: >
+      Detailed quality analysis including:
+      - Coverage assessment
+      - Identified gaps
+      - Refinement recommendations
+      - Decision on whether to continue searching
+
+strategic_planning_task:
+    name: "Strategic_Planning"
+    description: >
+      Develop a comprehensive strategic plan for pursuing identified funding opportunities.
+      
+      CRITICAL REQUIREMENTS:
+      1. Opportunity Analysis:
+         - Review all BAAs for specific topic alignment
+         - Analyze specific topics against company capabilities
+         - Map relevant events to opportunities
+         - Identify critical deadlines
+         
+      2. Timeline Development:
+         - Create 30/60/90 day action plans
+         - Schedule proposal development activities
+         - Plan event participation
+         - Set partnership development milestones
+         
+      3. Resource Planning:
+         - Assess proposal writing requirements
+         - Map technical expertise needs
+         - Identify partnership requirements
+         - Schedule review cycles
+         
+      4. Gap Analysis:
+         - Identify missing capabilities
+         - Flag information gaps
+         - Recommend partnership strategies
+         - Plan gap closure activities
+         
+      5. Event Strategy:
+         - Prioritize event participation
+         - Map events to specific opportunities
+         - Schedule preparation activities
+         - Plan follow-up actions
+         
+      6. Quality Checks:
+         - Verify opportunity alignment
+         - Validate timeline feasibility
+         - Check resource availability
+         - Assess partnership viability
+         
+      The plan must be actionable, realistic, and comprehensive while considering:
+      - Company resource constraints
+      - Technical capability alignment
+      - Timeline feasibility
+      - Partnership opportunities
+      - Event value proposition
+    expected_output: >
+      A structured strategic plan including:
+      
+      1. Immediate Actions (Next 30 Days):
+         - Critical deadlines
+         - Required registrations
+         - Partnership initiations
+         - Event preparations
+         
+      2. Near-Term Actions (30-60 Days):
+         - Proposal development starts
+         - Partnership development
+         - Technical preparation
+         - Event participation
+         
+      3. Medium-Term Actions (60-90 Days):
+         - Future proposal planning
+         - Capability development
+         - Partnership cultivation
+         - Strategic positioning
+         
+      4. Proposal Schedule:
+         - Topic deadlines
+         - Development timelines
+         - Review cycles
+         - Submission preparations
+         
+      5. Event Schedule:
+         - Registration deadlines
+         - Preparation requirements
+         - Participation strategy
+         - Follow-up plans
+         
+      6. Information Gaps:
+         - Missing capabilities
+         - Required partnerships
+         - Technical questions
+         - Additional research needs
+         
+      7. Partnership Strategy:
+         - Required partners
+         - Contact timeline
+         - Development approach
+         - Value proposition
+
   federal_grant_report_task:
     name: "Grant_Analysis_Report"
     description: >

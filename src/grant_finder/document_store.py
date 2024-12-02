@@ -9,7 +9,7 @@ from langchain_community.document_loaders import (
 )
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain.embeddings import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings  # Update this import at the top of the file
 from langchain.docstore.document import Document
 from langchain.retrievers import ParentDocumentRetriever
 from langchain.storage import LocalFileStore
@@ -30,24 +30,16 @@ class DocumentStoreManager:
         if not self.docs_dir.is_dir():
             raise ValueError(f"Path is not a directory: {self.docs_dir}")
         
+        # Create storage directory if it doesn't exist
         self.storage_dir = Path(storage_dir)
-        if not self.storage_dir.exists():
-            raise ValueError(f"Storage directory does not exist: {self.storage_dir}")
-        if not self.storage_dir.is_dir():
-            raise ValueError(f"Path is not a directory: {self.storage_dir}")
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
         
+        # Create index directory if it doesn't exist
         self.index_dir = storage_dir / "indices"
-        if not self.index_dir.exists():
-            raise ValueError(f"Index directory does not exist: {self.index_dir}")
-        if not self.index_dir.is_dir():
-            raise ValueError(f"Path is not a directory: {self.index_dir}")
+        self.index_dir.mkdir(parents=True, exist_ok=True)
         
         self.metadata_path = storage_dir / "document_metadata.json"
         self.embeddings = embeddings_model or OpenAIEmbeddings()
-        
-        # Create necessary directories
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.index_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize or load document metadata
         self.document_metadata = self._load_metadata()
@@ -97,7 +89,8 @@ class DocumentStoreManager:
         """Initialize or load the retriever with existing indices"""
         vectorstore = FAISS.load_local(
             self.index_dir / "faiss_index",
-            self.embeddings
+            self.embeddings,
+            allow_dangerous_deserialization=True
         ) if (self.index_dir / "faiss_index").exists() else FAISS.from_documents(
             [Document(page_content="", metadata={})],  # Initialize empty
             self.embeddings
@@ -134,8 +127,25 @@ class DocumentStoreManager:
                 
                 documents = loader.load()
                 
-                # Add documents to retriever
-                self.retriever.add_documents(documents)
+                # Convert documents to bytes for storage
+                serializable_docs = []
+                for i, doc in enumerate(documents):
+                    doc_dict = {
+                        "page_content": doc.page_content,
+                        "metadata": doc.metadata
+                    }
+                    # Convert to bytes and add as tuple with safe key
+                    doc_bytes = json.dumps(doc_dict).encode('utf-8')
+                    # Create safe key by replacing spaces and special chars
+                    safe_key = rel_path.replace(' ', '_').replace('.', '_').replace('-', '_')
+                    safe_key = f"doc_{safe_key}_{i}"
+                    serializable_docs.append((safe_key, doc_bytes))
+                
+                # Add documents to retriever's docstore
+                self.retriever.docstore.mset(serializable_docs)
+                
+                # Add to vectorstore
+                self.retriever.vectorstore.add_documents(documents)
                 
                 # Update metadata
                 self.document_metadata["indexed_files"][rel_path] = {
@@ -155,7 +165,7 @@ class DocumentStoreManager:
 
     def get_relevant_documents(self, query: str, max_documents: int = 5) -> List[Document]:
         """Retrieve relevant documents for a query"""
-        return self.retriever.get_relevant_documents(query, max_documents=max_documents)
+        return self.retriever.invoke(query, config={"max_documents": max_documents})
 
     def get_document_stats(self) -> Dict:
         """Get statistics about indexed documents"""

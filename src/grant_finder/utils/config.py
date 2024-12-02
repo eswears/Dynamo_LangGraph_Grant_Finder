@@ -4,7 +4,7 @@ import yaml
 from pydantic import ValidationError
 import logging
 
-from ..types import UserConfig, AgentConfig, ValidationError
+from ..types import UserInputConfig, AgentConfig, ValidationError
 
 logger = logging.getLogger('grant_finder')
 
@@ -48,15 +48,27 @@ def load_agent_configs() -> Dict[str, AgentConfig]:
         logger.error(f"Agent config validation failed: {str(e)}")
         raise
 
-def load_user_config() -> UserConfig:
+def load_user_config() -> UserInputConfig:
     """Load and validate user configuration"""
     config_path = Path(__file__).parent.parent / 'config' / 'user_config.yaml'
     config = load_yaml_config(config_path)
     
     try:
-        # Validate paths before creating UserConfig
+        # Validate paths before creating UserInputConfig 
         validate_paths(config)
-        return UserConfig(**config)
+        return UserInputConfig (**config)
     except ValidationError as e:
         logger.error(f"User config validation failed: {str(e)}")
         raise
+
+def get_llm_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Get LLM configuration with defaults"""
+    model_config = config.get("model", {})
+    
+    return {
+        "model_name": model_config.get("name", "gpt-3.5-turbo-0125"),
+        "temperature": model_config.get("temperature", 0.0),
+        "request_timeout": model_config.get("request_timeout", 180),
+        "max_tokens": model_config.get("max_tokens", 500),
+        "max_retries": model_config.get("max_retries", 3)
+    }

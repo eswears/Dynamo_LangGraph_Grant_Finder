@@ -4,15 +4,21 @@ from pathlib import Path
 import logging
 import yaml
 import os
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from .persistence import PersistenceManager
+from .utils.config import get_llm_config
 
 from .types import (
     GrantFinderState, LogConfig, OutputConfig, 
     UserInputConfig, GrantSearchError
 )
 from .nodes import build_graph
+
+# Initialize logger at module level
+logger = logging.getLogger('grant_finder')
 
 def setup_logging(timestamp: str, output_dir: Path) -> LogConfig:
     """Initialize logging configuration"""
@@ -64,8 +70,14 @@ def setup_logging(timestamp: str, output_dir: Path) -> LogConfig:
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file"""
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
+    try:
+        # Use Path to handle paths correctly and find config relative to main.py
+        config_file = Path(__file__).parent / 'config' / 'user_config.yaml'
+        with open(config_file, 'r') as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        logger.error(f"Failed to load config: {str(e)}")
+        raise
 
 def get_user_input(prompt: str, default: str) -> str:
     """Get user input with default value"""
@@ -73,6 +85,18 @@ def get_user_input(prompt: str, default: str) -> str:
     print(f"[Press Enter to use default: {default}]")
     user_input = input().strip()
     return user_input if user_input else default
+
+def print_progress(state: GrantFinderState):
+    """Print current search progress"""
+    progress = state.search_progress
+    print(f"\nSearch Progress:")
+    print(f"Sources Processed: {len(progress['sources_searched'])}/{progress['total_sources']}")
+    print(f"Successful Searches: {progress['successful_searches']}")
+    print(f"Failed Searches: {progress['failed_searches']}")
+    if state.identified_gaps:
+        print("\nIdentified Gaps:")
+        for gap in state.identified_gaps:
+            print(f"- {gap['type']}: {gap['description']}")
 
 def save_results(
     state: GrantFinderState,
@@ -142,6 +166,7 @@ def main():
         
         # Load configuration
         config = load_config("config/user_config.yaml")
+        llm_config = get_llm_config(config)
         output_dir = Path(config["output"]["output_directory"])
         
         # Setup logging
@@ -150,30 +175,79 @@ def main():
         
         logger.info("Starting Grant Finder process")
         
-        # Get API keys
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise GrantSearchError("OpenAI API key not found")
+        # Initialize persistence manager
+        persistence = PersistenceManager(output_dir / "persistence")
         
-        # Get user input
-        company_focus = get_user_input(
-            "What is the company's main focus for pursuing SBIR/STTR grants?",
-            "Artificial Intelligence and Machine Learning"
-        )
-        
-        organization_focus = get_user_input(
-            "What Grant organization are you interested in (DoD, EPA, Army, Air Force, etc.)?",
-            "DoD"
-        )
+        # Try to load previous session
+        previous_state = persistence.load_last_session()
+        if previous_state:
+            logger.info("Found previous session")
+            print("\nFound previous session. Would you like to:")
+            print("1. Continue previous search")
+            print("2. Start new search")
+            choice = input("Enter choice (1 or 2): ").strip()
+            
+            if choice == "1":
+                logger.info("Resuming previous session")
+                initial_state = GrantFinderState(**previous_state)
+                print("\nPrevious searches:", ", ".join(s["action"] for s in initial_state.search_history))
+                print("Would you like to:")
+                print("1. Expand current search areas")
+                print("2. Search new areas")
+                expand_choice = input("Enter choice (1 or 2): ").strip()
+                
+                company_focus = (
+                    initial_state.config["company_focus"] if expand_choice == "1"
+                    else get_user_input(
+                        "What is the company's main focus for pursuing SBIR/STTR grants?",
+                        "Artificial Intelligence and Machine Learning"
+                    )
+                )
+                
+                organization_focus = (
+                    initial_state.config["organization_focus"] if expand_choice == "1"
+                    else get_user_input(
+                        "What Grant organization are you interested in (DoD, EPA, Army, Air Force, etc.)?",
+                        "DoD"
+                    )
+                )
+            else:
+                # Get API keys
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    raise GrantSearchError("OpenAI API key not found")
+                
+                # Get user input for new search
+                company_focus = get_user_input(
+                    "What is the company's main focus for pursuing SBIR/STTR grants?",
+                    "Artificial Intelligence and Machine Learning"
+                )
+                
+                organization_focus = get_user_input(
+                    "What Grant organization are you interested in (DoD, EPA, Army, Air Force, etc.)?",
+                    "DoD"
+                )
+        else:
+            # Get API keys
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise GrantSearchError("OpenAI API key not found")
+            
+            # Get user input for new search
+            company_focus = get_user_input(
+                "What is the company's main focus for pursuing SBIR/STTR grants?",
+                "Artificial Intelligence and Machine Learning"
+            )
+            
+            organization_focus = get_user_input(
+                "What Grant organization are you interested in (DoD, EPA, Army, Air Force, etc.)?",
+                "DoD"
+            )
         
         # Initialize LLM
-        llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0,
-            api_key=api_key
-        )
-        
-        # Build graph
+        llm = ChatOpenAI(**llm_config, api_key=api_key)
+
+        # Build workflow
         workflow = build_graph(
             company_context_path=config["company_context"]["directory"],
             funding_sources_path=config["funding_sources"]["file_path"],
@@ -194,12 +268,16 @@ def main():
             }
         )
         
-        # Execute workflow
+        # Compile and execute workflow
         logger.info("Executing grant search workflow")
-        final_state = workflow.invoke(initial_state)
+        app = workflow.compile()
+        final_state = app.invoke(initial_state)
         
         # Save results
         save_results(final_state, output_dir, timestamp)
+        
+        # Save state for persistence
+        persistence.save_state(final_state)
         
         logger.info("Grant Finder process completed successfully")
         
@@ -208,8 +286,4 @@ def main():
         raise
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        sys.exit(1)
+    main()
