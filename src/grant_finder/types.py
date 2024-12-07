@@ -71,13 +71,15 @@ class GrantFinderState(BaseModel):
     searched_websites: set[str] = Field(default_factory=set)
     search_history: List[Dict[str, Any]] = Field(default_factory=list)
     
-    # Enhanced tracking fields
-    search_progress: Dict[str, Dict] = Field(default_factory=lambda: {
-        "sources_searched": [],
-        "total_sources": 0,
-        "successful_searches": 0,
-        "failed_searches": 0
-    })
+    # Fix the search_progress type to use proper nested structure
+    search_progress: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "sources_searched": [],
+            "total_sources": 0,
+            "successful_searches": 0,
+            "failed_searches": 0
+        }
+    )
     
     # Strategy tracking
     strategic_plan: Dict[str, Any] = Field(default_factory=dict)

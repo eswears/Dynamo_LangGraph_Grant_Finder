@@ -1,12 +1,11 @@
 # nodes.py
-from typing import Annotated, Dict, List, Optional, Any, Union
+from typing import Annotated, Dict, List, Optional, Any, Union, Tuple
 from pydantic import ValidationError
 import json
 from langchain_core.messages import BaseMessage, FunctionMessage
-from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain.agents import AgentExecutor, create_structured_chat_agent
 from langchain.tools import Tool, BaseTool  
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langgraph.graph import START, END, StateGraph
 from datetime import datetime
 import logging
@@ -14,6 +13,9 @@ from pathlib import Path
 import yaml
 from typing_extensions import TypeVar
 import time
+import os
+from openai import RateLimitError, OpenAIError
+from .models.base import BaseLanguageModel
 
 from .tools import (
     CompanyDocumentTool,
@@ -49,32 +51,39 @@ def load_task_config() -> Dict[str, any]:
         return yaml.safe_load(f)['tasks']
 
 class ProfileAnalysisNode:
-    def __init__(self, company_context_path: str, logger: logging.Logger, llm: ChatOpenAI):
+    def __init__(self, company_context_path: str, logger: logging.Logger, llm: BaseLanguageModel):
         self.logger = logger
+        self.llm = llm
         self.company_context_path = company_context_path
         self.tool = CompanyDocumentTool(company_context_path, logger)
         
-        # Load agent and task configs
-        agent_config = load_agent_config()['company_profiler']
-        task_config = load_task_config()['extract_company_profile_task']
+        # Load agent and task configs - store for use in __call__
+        self.agent_config = load_agent_config()['company_profiler']
+        self.task_config = load_task_config()['extract_company_profile_task']
         
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are {agent_config['name']}, {agent_config['role']}.
-            Background: {agent_config['backstory']}
-            Goal: {agent_config['goal']}
-            
-            Task: {task_config['description']}
-            Expected Output: {task_config['expected_output']}"""),
-            ("user", "{input}"),
-            ("assistant", "{agent_scratchpad}")
-        ])
-        
-        agent = create_openai_tools_agent(llm, [self.tool], prompt)
-        self.executor = AgentExecutor(agent=agent, tools=[self.tool])
+        self.logger.info("Initializing ProfileAnalysisNode with configs:")
+        self.logger.info(f"Agent config: {json.dumps(self.agent_config, indent=2)}")
+        self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
     
     def __call__(self, state: GrantFinderState) -> GrantFinderState:
         try:
             self.logger.info("Starting company profile analysis")
+            
+            # Create prompt template with state-dependent variables
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
+                Background: {self.agent_config['backstory']}
+                Goal: {self.agent_config['goal']}
+                
+                Task: {self.task_config['description']}
+                Expected Output: {self.task_config['expected_output']}"""),
+                ("user", "{input}"),
+                ("assistant", "{agent_scratchpad}")
+            ])
+            
+            # Create agent with current prompt
+            agent = create_structured_chat_agent(self.llm, [self.tool], prompt)
+            executor = AgentExecutor(agent=agent, tools=[self.tool])
             
             # Convert Path objects to strings
             input_data = ProfileAnalysisInput(
@@ -82,8 +91,12 @@ class ProfileAnalysisNode:
                 config=state.config
             )
 
-            result = self.executor.invoke({
-                "input": "Analyze company documents to extract complete profile"
+            result = executor.invoke({
+                "input": {
+                    "query": "Analyze company documents to extract complete profile",
+                    "documents": input_data.company_documents,
+                    "requirements": self.task_config['description']
+                }
             })
             
             # Validate output
@@ -107,51 +120,105 @@ class ProfileAnalysisNode:
             state.errors.append(f"Profile analysis validation error: {str(e)}")
             return state
         except Exception as e:
-            self.logger.error(f"Profile analysis failed: {str(e)}")
-            state.errors.append(f"Profile analysis error: {str(e)}")
-            return state
+            api_key = self.llm.openai_api_key
+            key_suffix = api_key.get_secret_value()[-4:] if api_key else "None"
+            
+            if isinstance(e, RateLimitError):
+                # Log the error details
+                error_detail = e.response.json() if hasattr(e, 'response') else str(e)
+                error_headers = e.response.headers if hasattr(e, 'response') else {}
+                
+                # Check if it's really a quota issue
+                if error_detail.get('error', {}).get('type') == 'insufficient_quota':
+                    # Add diagnostic info
+                    self.logger.error(f"Quota issue detected with key {key_suffix}:")
+                    self.logger.error(f"Model: {self.llm.model_name}")
+                    self.logger.error(f"Headers: {error_headers}")
+                    
+                    # Try a short wait and retry once
+                    time.sleep(2)
+                    try:
+                        self.logger.info("Retrying after quota error...")
+                        result = executor.invoke({
+                            "input": "Analyze company documents to extract complete profile"
+                        })
+                        return result
+                    except Exception as retry_e:
+                        error_msg = (f"Profile analysis retry failed using key ending in '{key_suffix}':\n"
+                                f"Original error: {json.dumps(error_detail, indent=2)}\n"
+                                f"Retry error: {str(retry_e)}")
+                else:
+                    error_msg = (f"Rate limit error using key ending in '{key_suffix}':\n"
+                                f"Error Details: {json.dumps(error_detail, indent=2)}\n"
+                                f"Response Headers: {json.dumps(dict(error_headers), indent=2)}")
+            else:
+                error_msg = f"Profile analysis failed using key ending in '{key_suffix}': {str(e)}"
+            self.logger.error(error_msg)
+            state.errors.append(error_msg)
+            raise RuntimeError(error_msg)
 
 class StrategyDevelopmentNode:
-    def __init__(self, logger: logging.Logger, llm: ChatOpenAI):
+    def __init__(self, logger: logging.Logger, llm: BaseLanguageModel):
         self.logger = logger
+        self.llm = llm  # Store LLM for later use
         
         # Create properly structured tool
         self.tool = StrategyRequirementsTool()
         
-        # Load agent and task configs
-        agent_config = load_agent_config()['strategic_writer_agent']
-        task_config = load_task_config()['write_strategic_requirements_task']
+        # Load agent and task configs - store for use in __call__
+        self.agent_config = load_agent_config()['strategic_writer_agent']
+        self.task_config = load_task_config()['write_strategic_requirements_task']
         
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are {agent_config['name']}, {agent_config['role']}.
-            Background: {agent_config['backstory']}
-            Goal: {agent_config['goal']}
-            
-            Task: {task_config['description']}
-            Expected Output: {task_config['expected_output']}"""),
-            ("user", "{input}"),
-            ("assistant", "{agent_scratchpad}")
-        ])
-        
-        agent = create_openai_tools_agent(llm, [self.tool], prompt)
-        self.executor = AgentExecutor(agent=agent, tools=[self.tool])
+        self.logger.info("Initializing StrategyDevelopmentNode with configs:")
+        self.logger.info(f"Agent config: {json.dumps(self.agent_config, indent=2)}")
+        self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
     
     def __call__(self, state: GrantFinderState) -> GrantFinderState:
         try:
             self.logger.info("Starting strategy development")
+            self.logger.info(f"Input state company profile: {json.dumps(state.company_profile.model_dump(), indent=2)}")
+            self.logger.info(f"Input state config: {json.dumps(state.config, indent=2)}")
             
-            # Validate input state
-            input_data = StrategyDevelopmentInput(
-                company_profile=state.company_profile,
-                company_focus=state.config["company_focus"],
-                organization_focus=state.config["organization_focus"]
-            )
+            # Format task description and output with state variables
+            self.task_config['description'] = self.task_config['description'].replace("{company_focus}", f"{state.config['company_focus']}")
+            self.task_config['expected_output'] = self.task_config['expected_output'].replace("{company_focus}", f"{state.config['company_focus']}")
+            
+            self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
+            
+            # Create prompt template with state-dependent variables
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
+                Background: {self.agent_config['backstory']}
+                Goal: {self.agent_config['goal']}
+                
+                Task: {self.task_config['description']}
+                Expected Output: {self.task_config['expected_output']}"""),
+                ("user", "{input}"),
+                ("assistant", "{agent_scratchpad}")
+            ])
+            
+            # Create agent with current prompt
+            agent = create_structured_chat_agent(self.llm, [self.tool], prompt)
+            self.executor = AgentExecutor(agent=agent, tools=[self.tool], llm=self.llm)
+            
+            # Create properly formatted input for the tool
+            tool_input = {
+                "profile_data": {
+                    "technical_focus": state.company_profile.technical_focus,
+                    "vision": state.company_profile.vision,
+                    "sbir_experience": state.company_profile.sbir_experience,
+                    "innovations": state.company_profile.innovations,
+                    "technical_experience": state.company_profile.technical_experience
+                },
+                "company_focus": state.config["company_focus"],
+                "organization_focus": state.config["organization_focus"]
+            }
             
             result = self.executor.invoke({
-                "input": "Develop strategic search requirements",
-                "company_focus": state.config["company_focus"]
-            })
-            
+                "input": f"Create strategic requirements for: {json.dumps(tool_input)}",
+                "agent_scratchpad": ""
+            })     
+
             # Validate output
             output_data = StrategyDevelopmentOutput(
                 search_requirements=SearchRequirementsState(
@@ -167,39 +234,47 @@ class StrategyDevelopmentNode:
             
         except ValidationError as e:
             self.logger.error(f"Strategy development validation failed: {str(e)}")
+            self.logger.error(f"Validation error details: {e.errors()}")
             state.errors.append(f"Strategy development validation error: {str(e)}")
             return state
         except Exception as e:
             self.logger.error(f"Strategy development failed: {str(e)}")
+            self.logger.error(f"Error details: {str(e)}", exc_info=True)
             state.errors.append(f"Strategy development error: {str(e)}")
             return state
 
 class StrategicPlannerNode:
-    def __init__(self, logger: logging.Logger, llm: ChatOpenAI):
+    def __init__(self, logger: logging.Logger, llm: BaseLanguageModel):
         self.logger = logger
         self.tool = StrategicPlannerTool()
         
         # Load agent and task configs
-        agent_config = load_agent_config()['strategic_planner_agent']
-        task_config = load_task_config()['strategic_planning_task']
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are {agent_config['name']}, {agent_config['role']}.
-            Background: {agent_config['backstory']}
-            Goal: {agent_config['goal']}
-            
-            Task: {task_config['description']}
-            Expected Output: {task_config['expected_output']}"""),
-            ("user", "{input}"),
-            ("assistant", "{agent_scratchpad}")
-        ])
-        
-        agent = create_openai_tools_agent(llm, [self.tool], prompt)
-        self.executor = AgentExecutor(agent=agent, tools=[self.tool])
+        self.agent_config = load_agent_config()['strategic_planner_agent']
+        self.task_config = load_task_config()['strategic_planning_task']        
     
     def __call__(self, state: GrantFinderState) -> GrantFinderState:
         try:
             self.logger.info("Starting strategic planning")
+            
+            # Format task description and output with state variables
+            self.task_config['description'] = self.task_config['description'].replace("{company_focus}", f"{state.config['company_focus']}")
+            self.task_config['expected_output'] = self.task_config['expected_output'].replace("{company_focus}", f"{state.config['company_focus']}")
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
+                Background: {self.agent_config['backstory']}
+                Goal: {self.agent_config['goal']}
+                
+                Task: {self.task_config['description']}
+                Expected Output: {self.task_config['expected_output']}"""),
+                ("user", "{input}"),
+                ("assistant", "{agent_scratchpad}")
+            ])
+        
+            agent = create_structured_chat_agent(self.llm, [self.tool], prompt)
+            self.executor = AgentExecutor(agent=agent, tools=[self.tool], llm=self.llm)
+
+            self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
             
             # Prepare input data
             planning_data = {
@@ -234,8 +309,9 @@ class StrategicPlannerNode:
             return state
 
 class GrantSearchNode:
-    def __init__(self, funding_sources_path: str, logger: logging.Logger, llm: ChatOpenAI, api_key: str):
+    def __init__(self, funding_sources_path: str, logger: logging.Logger, llm: BaseLanguageModel, api_key: str):
         self.logger = logger
+        self.llm = llm
         self.max_retries = 3
         self.retry_delay = 1  # Initial delay in seconds
         
@@ -250,27 +326,29 @@ class GrantSearchNode:
         ]
         
         # Load agent and task configs
-        agent_config = load_agent_config()['fed_grant_search_agent']
-        task_config = load_task_config()['fed_grant_task']
+        self.agent_config = load_agent_config()['fed_grant_search_agent']
+        self.task_config = load_task_config()['fed_grant_task']
         
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are {agent_config['name']}, {agent_config['role']}.
-            Background: {agent_config['backstory']}
-            Goal: {agent_config['goal']}
-            
-            Task: {task_config['description']}
-            Expected Output: {task_config['expected_output']}"""),
-            ("user", "{input}"),
-            ("assistant", "{agent_scratchpad}")
-        ])
-        
-        agent = create_openai_tools_agent(llm, self.tools, prompt)
-        self.executor = AgentExecutor(agent=agent, tools=self.tools)
-
     def _search_with_backoff(self, source_name: str, source_data: Dict, state: GrantFinderState) -> Tuple[bool, List[GrantOpportunityState]]:
         """Perform search with exponential backoff"""
         opportunities = []
         
+        # Create prompt template with state-dependent variables
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
+            Background: {self.agent_config['backstory']}
+            Goal: {self.agent_config['goal']}
+            
+            Task: {self.task_config['description']}
+            Expected Output: {self.task_config['expected_output']}"""),
+            ("user", "{input}"),
+            ("assistant", "{agent_scratchpad}")
+        ])
+    
+        # Create agent and executor
+        agent = create_structured_chat_agent(self.llm, self.tools, prompt)
+        executor = AgentExecutor(agent=agent, tools=self.tools, llm=self.llm)
+
         for attempt in range(self.max_retries):
             try:
                 if attempt > 0:
@@ -288,8 +366,8 @@ class GrantSearchNode:
                 }
                 
                 # Search for opportunities
-                result = self.executor.invoke({
-                    "input": f"Find grant opportunities from source using context: {search_context}"
+                result = executor.invoke({
+                    "input": f"Find grant opportunities from source using context: {json.dumps(search_context)}"
                 })
                 
                 # Process found opportunities
@@ -361,14 +439,19 @@ class GrantSearchNode:
         try:
             self.logger.info("Starting grant opportunity search")
             
+            # Format task description and output with state variables
+            self.task_config['description'] = self.task_config['description'].replace("{company_focus}", f"{state.config['company_focus']}")
+            self.task_config['expected_output'] = self.task_config['expected_output'].replace("{company_focus}", f"{state.config['company_focus']}")
+            
+            self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
+            
             # Validate input state
             input_data = GrantSearchInput(
                 search_requirements=state.search_requirements,
                 company_profile=state.company_profile,
                 funding_sources=state.funding_sources,
-                search_iterations=state.get("search_iterations", 0)
+                search_iterations=state.search_iterations
             )
-            
             # Load funding sources
             funding_tool = next(t for t in self.tools if isinstance(t, FundingSourceTool))
             sources = funding_tool._run("load")
@@ -480,35 +563,66 @@ class GrantSearchNode:
             return False
         
 class QualityCheckNode:
-    def __init__(self, logger: logging.Logger, llm: ChatOpenAI):
+    def __init__(self, logger: logging.Logger, llm: BaseLanguageModel):
         self.logger = logger
         self.llm = llm
         
-        # Load agent and task configs
-        agent_config = load_agent_config()['quality_check_agent']
-        task_config = load_task_config()['quality_check_task']
+        # Load agent and task configs - store for use in __call__
+        self.agent_config = load_agent_config()['quality_check_agent']
+        self.task_config = load_task_config()['quality_check_task']
         
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are {agent_config['name']}, {agent_config['role']}.
-            Background: {agent_config['backstory']}
-            Goal: {agent_config['goal']}
-            
-            Task: {task_config['description']}
-            Expected Output: {task_config['expected_output']}"""),
-            ("user", "{input}"),
-            ("assistant", "{agent_scratchpad}")
-        ])
-        
-        agent = create_openai_tools_agent(llm, [], prompt)
-        self.executor = AgentExecutor(agent=agent, tools=[])
+        self.logger.info("Initializing QualityCheckNode with configs:")
+        self.logger.info(f"Agent config: {json.dumps(self.agent_config, indent=2)}")
     
     def __call__(self, state: GrantFinderState) -> GrantFinderState:
         try:
             self.logger.info("Evaluating search result quality")
             
+            # Basic quality check first
             if state.search_iterations < 3 and len(state.grant_opportunities) < 5:
                 state.search_iterations += 1
                 return state
+            
+            # Format task description and output with state variables
+            self.task_config['description'] = self.task_config['description'].replace("{company_focus}", f"{state.config['company_focus']}")
+            self.task_config['expected_output'] = self.task_config['expected_output'].replace("{company_focus}", f"{state.config['company_focus']}")
+            
+            # Create prompt template with state-dependent variables
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
+                Background: {self.agent_config['backstory']}
+                Goal: {self.agent_config['goal']}
+                
+                Task: {self.task_config['description']}
+                Expected Output: {self.task_config['expected_output']}"""),
+                ("user", "{input}"),
+                ("assistant", "{agent_scratchpad}")
+            ])
+            
+            self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
+
+            # Create agent with current prompt
+            agent = create_structured_chat_agent(self.llm, [], prompt)
+            executor = AgentExecutor(agent=agent, tools=[])
+            
+            # Add executor.invoke call
+            result = executor.invoke({
+                "input": json.dumps({
+                    "opportunities": [opp.model_dump() for opp in state.grant_opportunities],
+                    "requirements": state.search_requirements.model_dump(),
+                    "iterations": state.search_iterations
+                }),
+                "agent_scratchpad": ""
+            })
+            
+            # Save results to state
+            state.validation_results["quality_check"] = result
+            state.add_to_history("quality_check", result)
+            
+            # If gaps were identified, add them to state
+            if "identified_gaps" in result:
+                for gap in result["identified_gaps"]:
+                    state.add_gap("quality", gap)
             
             return state
             
@@ -518,34 +632,41 @@ class QualityCheckNode:
             return state
 
 class FinalReportNode:
-    def __init__(self, logger: logging.Logger, llm: ChatOpenAI, output_dir: Path):
+    def __init__(self, logger: logging.Logger, llm: BaseLanguageModel, output_dir: Path):
         self.logger = logger
+        self.llm = llm
         self.output_dir = output_dir
-        
-        # Create properly structured tool
         self.tool = FinalReportTool()
         
-        #Load agent and task configs
-        agent_config = load_agent_config()['fed_grant_report_agent']
-        task_config = load_task_config()['federal_grant_report_task']
+        # Load agent and task configs - store for use in __call__
+        self.agent_config = load_agent_config()['fed_grant_report_agent']
+        self.task_config = load_task_config()['federal_grant_report_task']
         
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""You are {agent_config['name']}, {agent_config['role']}.
-            Background: {agent_config['backstory']}
-            Goal: {agent_config['goal']}
-            
-            Task: {task_config['description']}
-            Expected Output: {task_config['expected_output']}"""),
-            ("user", "{input}"),
-            ("assistant", "{agent_scratchpad}")
-        ])
-        
-        agent = create_openai_tools_agent(llm, [self.tool], prompt)
-        self.executor = AgentExecutor(agent=agent, tools=[self.tool])
+        self.logger.info("Initializing FinalReportNode with configs:")
+        self.logger.info(f"Agent config: {json.dumps(self.agent_config, indent=2)}")
     
     def __call__(self, state: GrantFinderState) -> GrantFinderState:
         try:
             self.logger.info("Starting final report generation")
+            self.task_config['description'] = self.task_config['description'].replace("{company_focus}", f"{state.config['company_focus']}")
+            self.task_config['expected_output'] = self.task_config['expected_output'].replace("{company_focus}", f"{state.config['company_focus']}")
+            
+            # Create prompt template with state-dependent variables
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
+                Background: {self.agent_config['backstory']}
+                Goal: {self.agent_config['goal']}
+                
+                Task: {self.task_config['description']}
+                Expected Output: {self.task_config['expected_output']}"""),
+                ("user", "{input}"),
+                ("assistant", "{agent_scratchpad}")
+            ])
+            self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
+
+            # Create agent with current prompt
+            agent = create_structured_chat_agent(self.llm, [self.tool], prompt)
+            self.executor = AgentExecutor(agent=agent, tools=[self.tool])
             
             # Validate input state
             input_data = FinalReportInput(
@@ -595,15 +716,16 @@ def build_graph(
     funding_sources_path: str,
     output_dir: Path,
     logger: logging.Logger,
-    llm: ChatOpenAI,
-    api_key: str
+    llm: BaseLanguageModel,
+    serp_api_key: str,
+    openai_api_key: str
 ) -> StateGraph:
     """Builds the complete LangGraph workflow"""
     
     # Initialize nodes
     profile_node = ProfileAnalysisNode(company_context_path, logger, llm)
     strategy_node = StrategyDevelopmentNode(logger, llm)
-    search_node = GrantSearchNode(funding_sources_path, logger, llm, api_key)
+    search_node = GrantSearchNode(funding_sources_path, logger, llm, serp_api_key)
     quality_node = QualityCheckNode(logger, llm)
     strategic_node = StrategicPlannerNode(logger, llm)
     report_node = FinalReportNode(logger, llm, output_dir)
@@ -628,11 +750,9 @@ def build_graph(
     # Define the conditional routing
     def route_by_quality(state: GrantFinderState) -> str:
         """Route based on search quality"""
-        # Check if we need more searching
-        if state.search_iterations < 3 and len(state.grant_opportunities) < 5:
-            return "search_grants"
-        # Move to strategic planning
-        return "plan_strategy"
+        # Return True if we need more searching
+        return state.search_iterations < 3 and len(state.grant_opportunities) < 5
+
 
     def route_by_gaps(state: GrantFinderState) -> str:
         """Route based on information gaps"""

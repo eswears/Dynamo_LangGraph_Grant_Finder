@@ -148,7 +148,7 @@ class GrantCrawler(BaseTool):
 
 class EnhancedGrantSearchTool(BaseTool):
     """Enhanced tool for comprehensive grant searching"""
-    name: str = Field(default="enhanced_grant_search", description="Tool for comprehensive grant searching")
+    name: str = Field(default="search_grants", description="Tool for comprehensive grant searching")
     description: str = Field(default="Performs comprehensive search across multiple grant sources and databases")
     logger: Any = Field(default=None, description="Logger instance")
     serp_api_key: str = Field(default=None, description="SerpAPI key")
@@ -368,6 +368,7 @@ class FundingSourceTool(BaseTool):
             for row in reader:
                 if row['Title'] and row['Source']:
                     sources[row['Title']] = {
+                        "name": row['Title'],
                         "url": row['Source'],
                         "was_searched": False,
                         "search_successful": False,
@@ -397,18 +398,22 @@ class StrategyRequirementsTool(BaseTool):
     
     def _run(self, query: str) -> str:
         """
-        Process company information to develop strategic search requirements.
-        
-        Args:
-            query (str): JSON string containing company profile data and focus areas
-            
-        Returns:
-            str: JSON string containing structured strategic requirements
+        Process company information to develop strategic search requirements.        
+        Args:  query (str): JSON string containing company profile data and focus areas            
+        Returns:str: JSON string containing structured strategic requirements
         """
         try:
             # Parse input data
-            company_data = json.loads(query)
+            # Parse input data
+            data = query if isinstance(query, dict) else json.loads(query) if isinstance(query, str) else {}
             
+            if not data:
+                raise ValueError("Empty or invalid input data")
+                
+            # Extract data from input dictionary
+            company_data = data.get("profile_data", {})
+            company_focus = data.get("company_focus", "")
+
             # Extract key capabilities from technical focus and experience
             capabilities = self._extract_capabilities(
                 company_data.get("technical_focus", ""),
@@ -609,9 +614,12 @@ class StrategicPlan(BaseModel):
     recommended_partnerships: List[Dict[str, str]]
 
 class StrategicPlannerTool(BaseTool):
-    name = "strategic_planner_tool"
-    description = """Tool for developing comprehensive strategic plans for pursuing funding opportunities.
-    Analyzes BAAs, specific topics, events, and deadlines to create actionable pursuit strategies."""
+    name: str = Field(default="strategic_planner_tool", description="Tool for strategic planning")
+    description: str = Field(
+        default="""Tool for developing comprehensive strategic plans for pursuing funding opportunities.
+        Analyzes BAAs, specific topics, events, and deadlines to create actionable pursuit strategies."""
+    )
+    current_date: datetime = Field(default_factory=datetime.now, description="Current date for timeline calculations")
     
     def __init__(self):
         super().__init__()
@@ -792,9 +800,11 @@ class StrategicPlannerTool(BaseTool):
         return self._run(query)
 
 class FinalReportTool(BaseTool):
-    name = "final_report_tool"
-    description = """Tool for generating comprehensive grant analysis reports.
-    Use this tool to analyze opportunities and create strategic recommendations."""
+    name: str = Field(default="final_report_tool", description="Tool for generating final reports")
+    description: str = Field(
+        default="""Tool for generating comprehensive grant analysis reports.
+        Use this tool to analyze opportunities and create strategic recommendations."""
+    )
     
     def _run(self, query: str) -> str:
         """Generate report analysis"""

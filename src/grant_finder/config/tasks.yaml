@@ -18,7 +18,7 @@ tasks:
 
   write_strategic_requirements_task:
     name: Write_Strategic_Requirements
-    description: >
+    description: |
       Develop strategic requirements from the material gathered in the search_pdf_task to be used as a set of grant search requirements
       that align with the company's focus, interests, and technical capabilities.
 
@@ -50,14 +50,14 @@ tasks:
       - Aligned with the company's focus, interests, and technical capabilities
 
       Here's the company high level focus, {company_focus}
-    expected_output: >
+    expected_output: |
       Strategic requirements summary highlighting company-grant search requirements that can be used to find relevant SBIR/STTR grants.
     context: 
       - extract_company_profile_task
 
   fed_grant_task:
     name: Federal_Grant_Search
-    description: >
+    description: |
       Using the provided funding sources and strategic requirements from the previous task to search for
       relevant federal grant opportunities from their websites. Search each website for grant opportunities
       and other similar funding sources that can be added to the funding tracker. Ensure that the funding
@@ -96,36 +96,12 @@ tasks:
          - Award size and phase
          - Timeline alignment
          - Past success rates
-    expected_output: >
-      Detailed analysis of each relevant grant opportunity found match the pydantic model schema, which should include
-      the following information:
-      1. Topic Details:
-         - Topic ID and title
-         - Agency and program
-         - Submission deadline
-         - Award amount and duration
-         
-      2. Technical Analysis:
-         - Key technical requirements
-         - Alignment with company capabilities
-         - Innovation opportunities
-         - Technical risks and mitigations
-         
-      3. Strategic Fit:
-         - Market potential
-         - Competition assessment
-         - Success probability
-         - Strategic value
-         
-      4. Action Items:
-         - Required capabilities
-         - Technical gaps
-         - Partnership needs
-         - Next steps
+    expected_output: |
+      Detailed analysis of each relevant grant opportunity found match the pydantic model schema.
 
   quality_check_task:
     name: "Quality_Check"
-    description: >
+    description: |
       Analyze the grant search results for completeness and quality.
       
       EVALUATION CRITERIA:
@@ -145,16 +121,16 @@ tasks:
          - Underrepresented focus areas
          - Timeline gaps
          - Award size gaps
-    expected_output: >
+    expected_output: |
       Detailed quality analysis including:
       - Coverage assessment
       - Identified gaps
       - Refinement recommendations
       - Decision on whether to continue searching
 
-strategic_planning_task:
+  strategic_planning_task:
     name: "Strategic_Planning"
-    description: >
+    description: |
       Develop a comprehensive strategic plan for pursuing identified funding opportunities.
       
       CRITICAL REQUIREMENTS:
@@ -200,7 +176,7 @@ strategic_planning_task:
       - Timeline feasibility
       - Partnership opportunities
       - Event value proposition
-    expected_output: >
+    expected_output: |
       A structured strategic plan including:
       
       1. Immediate Actions (Next 30 Days):
@@ -247,7 +223,7 @@ strategic_planning_task:
 
   federal_grant_report_task:
     name: "Grant_Analysis_Report"
-    description: >
+    description: |
       Create a comprehensive analysis report of the identified grant opportunities.
       
       REPORT REQUIREMENTS:
@@ -273,7 +249,7 @@ strategic_planning_task:
          - Required preparations
          - Timeline and milestones
          - Resource allocation
-    expected_output: >
+    expected_output: |
       A comprehensive report including:
       1. Executive Summary
          - Key opportunities

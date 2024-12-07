@@ -1,5 +1,5 @@
 # main.py
-from typing import Dict, Any
+from typing import Dict, Any, TypeVar
 from pathlib import Path
 import logging
 import yaml
@@ -7,9 +7,11 @@ import os
 import json
 from datetime import datetime
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from .persistence import PersistenceManager
 from .utils.config import get_llm_config
+from langgraph.graph import Graph, StateGraph
+from .models.bitnet import BitNetLLM
+from .models.openai_wrapper import OpenAIWrapper
 
 from .types import (
     GrantFinderState, LogConfig, OutputConfig, 
@@ -19,6 +21,8 @@ from .nodes import build_graph
 
 # Initialize logger at module level
 logger = logging.getLogger('grant_finder')
+
+State = TypeVar("State", bound=GrantFinderState)
 
 def setup_logging(timestamp: str, output_dir: Path) -> LogConfig:
     """Initialize logging configuration"""
@@ -86,95 +90,51 @@ def get_user_input(prompt: str, default: str) -> str:
     user_input = input().strip()
     return user_input if user_input else default
 
-def print_progress(state: GrantFinderState):
-    """Print current search progress"""
-    progress = state.search_progress
-    print(f"\nSearch Progress:")
-    print(f"Sources Processed: {len(progress['sources_searched'])}/{progress['total_sources']}")
-    print(f"Successful Searches: {progress['successful_searches']}")
-    print(f"Failed Searches: {progress['failed_searches']}")
-    if state.identified_gaps:
-        print("\nIdentified Gaps:")
-        for gap in state.identified_gaps:
-            print(f"- {gap['type']}: {gap['description']}")
-
-def save_results(
-    state: GrantFinderState,
-    output_dir: Path,
-    timestamp: str
-) -> None:
-    """Save all results and generate summary"""
-    results_dir = output_dir / timestamp
-    results_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save company profile
-    with open(results_dir / "01_company_profile.json", 'w') as f:
-        json.dump(state["company_profile"], f, indent=2)
-    
-    # Save search requirements
-    with open(results_dir / "02_search_requirements.json", 'w') as f:
-        json.dump(state["search_requirements"], f, indent=2)
-    
-    # Save grant opportunities
-    with open(results_dir / "03_grant_opportunities.json", 'w') as f:
-        json.dump(state["grant_opportunities"], f, indent=2)
-    
-    # Save funding source tracking
-    with open(results_dir / "04_funding_source_tracking.json", 'w') as f:
-        json.dump(state["funding_sources"], f, indent=2)
-    
-    # Save final report
-    with open(results_dir / "05_final_report.json", 'w') as f:
-        json.dump(state["final_report"], f, indent=2)
-    
-    # Generate and save summary
-    summary = {
-        "timestamp": timestamp,
-        "total_sources_processed": len(state["funding_sources"]),
-        "total_opportunities_found": len(state["grant_opportunities"]),
-        "successful_searches": sum(
-            1 for s in state["funding_sources"].values() 
-            if s["search_successful"]
-        ),
-        "errors": state["errors"]
-    }
-    
-    with open(results_dir / "summary.json", 'w') as f:
-        json.dump(summary, f, indent=2)
-    
-    # Print summary
-    print("\n" + "="*50)
-    print("Grant Search Summary")
-    print("="*50)
-    print(f"Total Sources Processed: {summary['total_sources_processed']}")
-    print(f"Successful Searches: {summary['successful_searches']}")
-    print(f"Total Opportunities Found: {summary['total_opportunities_found']}")
-    if summary['errors']:
-        print("\nErrors encountered:")
-        for error in summary['errors']:
-            print(f"- {error}")
-    print("\nResults saved to:", results_dir)
-    print("="*50 + "\n")
-
 def main():
     try:
-        # Load environment variables
-        load_dotenv()
-        
-        # Generate timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
+        print("Starting Grant Finder process")                
+
         # Load configuration
         config = load_config("config/user_config.yaml")
         llm_config = get_llm_config(config)
+
+        # Create default output dir for logging
         output_dir = Path(config["output"]["output_directory"])
-        
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         # Setup logging
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         log_config = setup_logging(timestamp, output_dir)
         logger = log_config["system_logger"]
+
+        # Load environment variables from the correct location
+        env_path = Path(__file__).parent / '.env'
+        if not env_path.exists():
+            # Try one directory up if not found
+            env_path = Path(__file__).parent.parent / '.env'
+        load_dotenv(env_path)
         
-        logger.info("Starting Grant Finder process")
+        # Initialize LLM based on type
+        model_type = config.get("llm", {}).get("model_type", "openai")
         
+        if model_type == "openai":
+            # Get API key for OpenAI
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+            if not openai_api_key:
+                raise GrantSearchError("OPENAI_API_KEY environment variable not found")
+            llm = OpenAIWrapper(**llm_config, api_key=openai_api_key)
+        elif model_type == "bitnet":
+            llm = BitNetLLM(**llm_config)
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
+        
+        logger.info(f"Initialized {model_type} model")
+        
+        # Get SERP API key for search functionality
+        serp_api_key = os.getenv("SERPER_API_KEY") or os.getenv("SERP_API_KEY")
+        if not serp_api_key:
+            raise GrantSearchError("Neither SERPER_API_KEY nor SERP_API_KEY environment variable found")
+
         # Initialize persistence manager
         persistence = PersistenceManager(output_dir / "persistence")
         
@@ -212,12 +172,6 @@ def main():
                     )
                 )
             else:
-                # Get API keys
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    raise GrantSearchError("OpenAI API key not found")
-                
-                # Get user input for new search
                 company_focus = get_user_input(
                     "What is the company's main focus for pursuing SBIR/STTR grants?",
                     "Artificial Intelligence and Machine Learning"
@@ -228,12 +182,6 @@ def main():
                     "DoD"
                 )
         else:
-            # Get API keys
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise GrantSearchError("OpenAI API key not found")
-            
-            # Get user input for new search
             company_focus = get_user_input(
                 "What is the company's main focus for pursuing SBIR/STTR grants?",
                 "Artificial Intelligence and Machine Learning"
@@ -243,20 +191,25 @@ def main():
                 "What Grant organization are you interested in (DoD, EPA, Army, Air Force, etc.)?",
                 "DoD"
             )
-        
-        # Initialize LLM
-        llm = ChatOpenAI(**llm_config, api_key=api_key)
 
-        # Build workflow
-        workflow = build_graph(
+        # Build workflow using StateGraph instead of just Graph
+        workflow = StateGraph(State)
+        
+        # Add nodes using build_graph
+        nodes = build_graph(
             company_context_path=config["company_context"]["directory"],
             funding_sources_path=config["funding_sources"]["file_path"],
             output_dir=output_dir,
             logger=logger,
             llm=llm,
-            api_key=api_key
+            serp_api_key=serp_api_key,
+            openai_api_key=openai_api_key
         )
         
+        # Add nodes to graph
+        for node_name, node in nodes.items():
+            workflow.add_node(node_name, node)
+            
         # Initialize state
         initial_state = GrantFinderState(
             timestamp=timestamp,
@@ -268,8 +221,7 @@ def main():
             }
         )
         
-        # Compile and execute workflow
-        logger.info("Executing grant search workflow")
+        # Compile and execute workflow with proper typing
         app = workflow.compile()
         final_state = app.invoke(initial_state)
         

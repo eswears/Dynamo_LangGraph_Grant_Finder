@@ -66,7 +66,7 @@ agents:
       searching would be beneficial. Takes a systematic approach to evaluating
       results and suggesting refinements to search criteria.
 
-strategic_planner_agent:
+  strategic_planner_agent:
     name: Strategic_Planner
     role: Strategic Planning and Execution Specialist
     goal: >
@@ -105,6 +105,5 @@ strategic_planner_agent:
     goal: >
       - Compile comprehensive list of grant opportunities
       - Analyze each grant opportunity alignment with company capabilities
-      - Provide strategic recommendations for grant pursuit, such as the order to puruse to have the most 
-      impact on the company, while having a good chance of success
+      - Provide strategic recommendations for grant pursuit, such as the order to puruse to have the most impact on the company, while having a good chance of success
     backstory: Specialized in creating detailed analysis reports of federal grant opportunities and providing strategic pursuit recommendations.

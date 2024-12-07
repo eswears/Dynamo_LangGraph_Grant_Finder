@@ -8,22 +8,42 @@ company_context:
 funding_sources:
   file_path: "C:/data/funding_sources/grant_funding_sources.csv"
 
-# Model configuration
-model:
-  name: "gpt-3.5-turbo-0125"
-  temperature: 0.0
-  request_timeout: 180
-  max_tokens: 500
-  max_retries: 3
-  concurrency_limit: 2
-  backoff_factor: 2
-  min_delay: 1
+# LLM Configuration
+llm:
+  # Can be "openai" or "bitnet"
+  model_type: "bitnet"
+  
+  # OpenAI specific settings
+  openai:
+    model_name: "gpt-3.5-turbo-0125"
+    temperature: 0.0
+    request_timeout: 180
+    max_tokens: 500
+    max_retries: 3
+    concurrency_limit: 2
+    backoff_factor: 2
+    min_delay: 1
+  
+  # BitNet specific settings
+  bitnet:
+    model_path: "models/bitnet_b1_58-large"
+    model_size: "0.7B"  # 0.7B, 3.3B, or 8.0B
+    quantization: "i2_s"  # i2_s or tl1
+    kernel_type: "i2_s"  # i2_s, tl1, or tl2 based on CPU architecture
+    threads: 4
+    ctx_size: 2048
+    temperature: 0.0
+    n_predict: 128
+    n_prompt: 512
+    quant_embd: false
+    use_pretuned: false
 
 # Optional Configurations
 output:
   format: "markdown"
   save_to_file: true
   output_directory: "C:/data/grant_finder_output"
+
 logging:
   level: "INFO"
   file: "logs/grant_finder.log"
