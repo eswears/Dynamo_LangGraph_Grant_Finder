@@ -69,6 +69,11 @@ class ProfileAnalysisNode:
         try:
             self.logger.info("Starting company profile analysis")
             
+            # Define tools information properly
+            tools = [self.tool]
+            tool_names = [tool.name for tool in tools]
+            tools_desc = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
+            
             # Create prompt template with state-dependent variables
             prompt = ChatPromptTemplate.from_messages([
                 ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
@@ -76,14 +81,41 @@ class ProfileAnalysisNode:
                 Goal: {self.agent_config['goal']}
                 
                 Task: {self.task_config['description']}
-                Expected Output: {self.task_config['expected_output']}"""),
+                Expected Output: {self.task_config['expected_output']}
+                
+                IMPORTANT: Your response MUST be in this format:
+                ```json
+                {{{{
+                    "vision": "company vision here",
+                    "technical_focus": "technical focus here",
+                    "website": "website url here",
+                    "sbir_experience": "sbir experience here",
+                    "innovations": "innovations here",
+                    "technical_experience": "technical experience here"
+                }}}}
+                ```"""),
                 ("user", "{input}"),
-                ("assistant", "{agent_scratchpad}")
+                ("assistant", "{agent_scratchpad}"),
+                ("system", "Available tools:\n{tools}"),
             ])
             
-            # Create agent with current prompt
-            agent = create_structured_chat_agent(self.llm, [self.tool], prompt)
-            executor = AgentExecutor(agent=agent, tools=[self.tool])
+            # Create agent with current prompt and properly formatted tools
+            agent = create_structured_chat_agent(
+                llm=self.llm,
+                tools=tools,
+                prompt=prompt.partial(
+                    tools=tools_desc,
+                    tool_names=tool_names
+                )
+            )
+            
+            # Add handle_parsing_errors=True to AgentExecutor
+            executor = AgentExecutor(
+                agent=agent, 
+                tools=tools,
+                handle_parsing_errors=True,
+                max_iterations=3
+            )
             
             # Convert Path objects to strings
             input_data = ProfileAnalysisInput(
@@ -120,39 +152,7 @@ class ProfileAnalysisNode:
             state.errors.append(f"Profile analysis validation error: {str(e)}")
             return state
         except Exception as e:
-            api_key = self.llm.openai_api_key
-            key_suffix = api_key.get_secret_value()[-4:] if api_key else "None"
-            
-            if isinstance(e, RateLimitError):
-                # Log the error details
-                error_detail = e.response.json() if hasattr(e, 'response') else str(e)
-                error_headers = e.response.headers if hasattr(e, 'response') else {}
-                
-                # Check if it's really a quota issue
-                if error_detail.get('error', {}).get('type') == 'insufficient_quota':
-                    # Add diagnostic info
-                    self.logger.error(f"Quota issue detected with key {key_suffix}:")
-                    self.logger.error(f"Model: {self.llm.model_name}")
-                    self.logger.error(f"Headers: {error_headers}")
-                    
-                    # Try a short wait and retry once
-                    time.sleep(2)
-                    try:
-                        self.logger.info("Retrying after quota error...")
-                        result = executor.invoke({
-                            "input": "Analyze company documents to extract complete profile"
-                        })
-                        return result
-                    except Exception as retry_e:
-                        error_msg = (f"Profile analysis retry failed using key ending in '{key_suffix}':\n"
-                                f"Original error: {json.dumps(error_detail, indent=2)}\n"
-                                f"Retry error: {str(retry_e)}")
-                else:
-                    error_msg = (f"Rate limit error using key ending in '{key_suffix}':\n"
-                                f"Error Details: {json.dumps(error_detail, indent=2)}\n"
-                                f"Response Headers: {json.dumps(dict(error_headers), indent=2)}")
-            else:
-                error_msg = f"Profile analysis failed using key ending in '{key_suffix}': {str(e)}"
+            error_msg = f"Profile analysis failed: {str(e)}"
             self.logger.error(error_msg)
             state.errors.append(error_msg)
             raise RuntimeError(error_msg)
@@ -185,21 +185,48 @@ class StrategyDevelopmentNode:
             
             self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
             
-            # Create prompt template with state-dependent variables
+            # Define tools information properly
+            tools = [self.tool]
+            tool_names = [tool.name for tool in tools]
+            tools_desc = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
+            
+            # Create prompt template with state-dependent variables and JSON format
             prompt = ChatPromptTemplate.from_messages([
                 ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
                 Background: {self.agent_config['backstory']}
                 Goal: {self.agent_config['goal']}
                 
                 Task: {self.task_config['description']}
-                Expected Output: {self.task_config['expected_output']}"""),
+                
+                IMPORTANT: Your response MUST be in this exact JSON format:
+                ```json
+                {{{{
+                    "technical_requirements": ["requirement1", "requirement2"],
+                    "innovation_areas": ["area1", "area2"],
+                    "competitive_advantages": ["advantage1", "advantage2"],
+                    "target_phases": ["phase1", "phase2"]
+                }}}}
+                ```"""),
                 ("user", "{input}"),
-                ("assistant", "{agent_scratchpad}")
+                ("assistant", "{agent_scratchpad}"),
+                ("system", "Available tools:\n{tools}")
             ])
             
-            # Create agent with current prompt
-            agent = create_structured_chat_agent(self.llm, [self.tool], prompt)
-            self.executor = AgentExecutor(agent=agent, tools=[self.tool], llm=self.llm)
+            # Create agent with properly formatted tools
+            agent = create_structured_chat_agent(
+                llm=self.llm,
+                tools=tools,
+                prompt=prompt.partial(
+                    tools=tools_desc,
+                    tool_names=tool_names
+                )
+            )
+            self.executor = AgentExecutor(
+                agent=agent,
+                tools=tools,
+                handle_parsing_errors=True,
+                max_iterations=3
+            )
             
             # Create properly formatted input for the tool
             tool_input = {
@@ -246,6 +273,7 @@ class StrategyDevelopmentNode:
 class StrategicPlannerNode:
     def __init__(self, logger: logging.Logger, llm: BaseLanguageModel):
         self.logger = logger
+        self.llm = llm
         self.tool = StrategicPlannerTool()
         
         # Load agent and task configs
@@ -260,6 +288,11 @@ class StrategicPlannerNode:
             self.task_config['description'] = self.task_config['description'].replace("{company_focus}", f"{state.config['company_focus']}")
             self.task_config['expected_output'] = self.task_config['expected_output'].replace("{company_focus}", f"{state.config['company_focus']}")
             
+            # Define tools information properly
+            tools = [self.tool]
+            tool_names = [tool.name for tool in tools]
+            tools_desc = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
+            
             prompt = ChatPromptTemplate.from_messages([
                 ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
                 Background: {self.agent_config['backstory']}
@@ -268,11 +301,24 @@ class StrategicPlannerNode:
                 Task: {self.task_config['description']}
                 Expected Output: {self.task_config['expected_output']}"""),
                 ("user", "{input}"),
-                ("assistant", "{agent_scratchpad}")
+                ("assistant", "{agent_scratchpad}"),
+                ("system", "Available tools:\n{tools}")
             ])
-        
-            agent = create_structured_chat_agent(self.llm, [self.tool], prompt)
-            self.executor = AgentExecutor(agent=agent, tools=[self.tool], llm=self.llm)
+            
+            agent = create_structured_chat_agent(
+                llm=self.llm,
+                tools=tools,
+                prompt=prompt.partial(
+                    tools=tools_desc,
+                    tool_names=tool_names
+                )
+            )
+            executor = AgentExecutor(
+                agent=agent,
+                tools=tools,
+                handle_parsing_errors=True,
+                max_iterations=3
+            )
 
             self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
             
@@ -285,7 +331,7 @@ class StrategicPlannerNode:
             }
             
             # Generate strategic plan
-            result = self.executor.invoke({
+            result = executor.invoke({
                 "input": f"Develop strategic plan using: {json.dumps(planning_data)}"
             })
             
@@ -333,6 +379,11 @@ class GrantSearchNode:
         """Perform search with exponential backoff"""
         opportunities = []
         
+        # Define tools information properly
+        tools = self.tools
+        tool_names = [tool.name for tool in tools]
+        tools_desc = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
+        
         # Create prompt template with state-dependent variables
         prompt = ChatPromptTemplate.from_messages([
             ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
@@ -342,12 +393,26 @@ class GrantSearchNode:
             Task: {self.task_config['description']}
             Expected Output: {self.task_config['expected_output']}"""),
             ("user", "{input}"),
-            ("assistant", "{agent_scratchpad}")
+            ("assistant", "{agent_scratchpad}"),
+            ("system", "Available tools:\n{tools}")
         ])
     
         # Create agent and executor
-        agent = create_structured_chat_agent(self.llm, self.tools, prompt)
-        executor = AgentExecutor(agent=agent, tools=self.tools, llm=self.llm)
+        agent = create_structured_chat_agent(
+            llm=self.llm,
+            tools=tools,
+            prompt=prompt.partial(
+                tools=tools_desc,
+                tool_names=tool_names
+            )
+        )
+        executor = AgentExecutor(
+            agent=agent, 
+            tools=self.tools, 
+            llm=self.llm,
+            handle_parsing_errors=True,
+            max_iterations=3
+        )
 
         for attempt in range(self.max_retries):
             try:
@@ -356,11 +421,11 @@ class GrantSearchNode:
                     self.logger.info(f"Retrying {source_name} after {delay} seconds (attempt {attempt + 1})")
                     time.sleep(delay)
                 
-                # Create search context
+                # Create search context with serializable data
                 search_context = {
                     "source_name": source_name,
                     "source_url": source_data["url"],
-                    "requirements": state.search_requirements,
+                    "requirements": state.search_requirements.dict(),  # Convert to dict
                     "company_focus": state.config["company_focus"],
                     "organization_focus": state.config["organization_focus"]
                 }
@@ -717,8 +782,7 @@ def build_graph(
     output_dir: Path,
     logger: logging.Logger,
     llm: BaseLanguageModel,
-    serp_api_key: str,
-    openai_api_key: str
+    serp_api_key: str
 ) -> StateGraph:
     """Builds the complete LangGraph workflow"""
     
@@ -751,29 +815,28 @@ def build_graph(
     def route_by_quality(state: GrantFinderState) -> str:
         """Route based on search quality"""
         # Return True if we need more searching
-        return state.search_iterations < 3 and len(state.grant_opportunities) < 5
-
+        return "search_grants" if state.search_iterations < 3 and len(state.grant_opportunities) < 5 else "plan_strategy"
 
     def route_by_gaps(state: GrantFinderState) -> str:
         """Route based on information gaps"""
-        if state.strategic_plan.get("information_gaps"):
-            state.search_iterations += 1
-            return "search_grants"
-        return "generate_report"
+        return "search_grants" if state.strategic_plan.get("information_gaps") else "generate_report"
 
     workflow.add_conditional_edges(
         "check_quality",
         route_by_quality,
-        {True: "search_grants", False: "plan_strategy"}
+        {"search_grants": "search_grants", "plan_strategy": "plan_strategy"}
     )
 
     workflow.add_conditional_edges(
         "plan_strategy",
         route_by_gaps,
-        {True: "search_grants", False: "generate_report"}
+        {"search_grants": "search_grants", "generate_report": "generate_report"}
     )
     
     # Add final edge to END
     workflow.add_edge("generate_report", END)
+    
+    # Use set_finish_point instead of set_finish
+    workflow.set_finish_point("generate_report")
     
     return workflow

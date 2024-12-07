@@ -60,7 +60,6 @@ Thumbs.db
 *.csv
 *.json
 data/embeddings/
-models/
 
 # Logs and databases
 *.log

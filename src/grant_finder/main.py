@@ -10,8 +10,9 @@ from dotenv import load_dotenv
 from .persistence import PersistenceManager
 from .utils.config import get_llm_config
 from langgraph.graph import Graph, StateGraph
-from .models.bitnet import BitNetLLM
-from .models.openai_wrapper import OpenAIWrapper
+from grant_finder.models.base import BaseLanguageModel
+from grant_finder.models.bitnet import BitNetLLM
+from grant_finder.models.openai_wrapper import OpenAIWrapper
 
 from .types import (
     GrantFinderState, LogConfig, OutputConfig, 
@@ -89,6 +90,29 @@ def get_user_input(prompt: str, default: str) -> str:
     print(f"[Press Enter to use default: {default}]")
     user_input = input().strip()
     return user_input if user_input else default
+
+def save_results(state: GrantFinderState, output_dir: Path, timestamp: str) -> None:
+    """Save final results to output directory"""
+    results_dir = output_dir / timestamp
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save final report
+    if state.final_report:
+        report_path = results_dir / "final_report.json"
+        with open(report_path, 'w') as f:
+            json.dump(state.final_report, f, indent=2)
+    
+    # Save opportunities
+    if state.grant_opportunities:
+        opps_path = results_dir / "opportunities.json"
+        with open(opps_path, 'w') as f:
+            json.dump([opp.dict() for opp in state.grant_opportunities], f, indent=2)
+    
+    # Save search history
+    if state.search_history:
+        history_path = results_dir / "search_history.json"
+        with open(history_path, 'w') as f:
+            json.dump(state.search_history, f, indent=2)
 
 def main():
     try:
@@ -202,14 +226,9 @@ def main():
             output_dir=output_dir,
             logger=logger,
             llm=llm,
-            serp_api_key=serp_api_key,
-            openai_api_key=openai_api_key
+            serp_api_key=serp_api_key
         )
         
-        # Add nodes to graph
-        for node_name, node in nodes.items():
-            workflow.add_node(node_name, node)
-            
         # Initialize state
         initial_state = GrantFinderState(
             timestamp=timestamp,
@@ -222,7 +241,7 @@ def main():
         )
         
         # Compile and execute workflow with proper typing
-        app = workflow.compile()
+        app = nodes.compile()
         final_state = app.invoke(initial_state)
         
         # Save results
