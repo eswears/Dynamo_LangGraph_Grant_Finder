@@ -12,47 +12,197 @@ import aiohttp
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urljoin
 from pathlib import Path
-from .document_store import DocumentStoreManager
-from .types import DocumentSearchResult, WebSearchResult, GrantSearchError
-from pydantic import Field, BaseModel
+from .document_store import HierarchicalDocumentStore
+from .types import DocumentSearchResult, WebSearchResult, GrantSearchError, CompanyDocumentToolConfig
+from pydantic import Field, BaseModel, ConfigDict
+from langchain.docstore.document import Document
+from langchain_core.language_models import BaseLanguageModel
+import numpy as np
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 class CompanyDocumentTool(BaseTool):
-    name: str = Field(default="company_document_tool", description="Tool for searching company documents")
-    description: str = Field(default="Searches and analyzes company documents for relevant information")
-    logger: Any = Field(default=None, description="Logger instance")
-    doc_manager: Any = Field(default=None, description="Document manager instance")
+    """Tool for analyzing company documents using hierarchical RAG"""
     
-    def __init__(self, directory_path: str, logger: logging.Logger):
+    # Define class-level attributes for BaseTool
+    name: str = "company_document_tool"
+    description: str = "Searches and analyzes company documents for relevant information"
+    
+    def __init__(
+        self, 
+        directory_path: Path, 
+        logger: logging.Logger, 
+        llm: BaseLanguageModel,
+        config: Dict[str, Any], 
+        previous_context: Optional[Dict[str, Any]] = None
+    ):
+        """Initialize the tool with required parameters"""
+        # Call parent class constructor first
         super().__init__()
-        self.logger = logger
-        docs_dir = Path(directory_path)
-        storage_dir = docs_dir / ".document_store"
         
-        self.doc_manager = DocumentStoreManager(
-            docs_dir=docs_dir,
-            storage_dir=storage_dir
+        # Store instance attributes with leading underscore
+        self._directory_path = directory_path
+        self._logger = logger
+        self._llm = llm
+        self._config = config
+        self._previous_context = previous_context
+        
+        # Initialize document store
+        self._doc_store = HierarchicalDocumentStore(
+            self._directory_path,
+            self._logger,
+            self._config,
+            self._llm,
+            self._previous_context
         )
         
-        # Update indices on initialization
-        new_docs = self.doc_manager.update_document_index()
-        if new_docs:
-            self.logger.info(f"Indexed {len(new_docs)} new or modified documents")
+        # Process documents
+        self._ensure_documents_processed()
     
-    def _run(self, query: str) -> List[DocumentSearchResult]:
-        try:
-            documents = self.doc_manager.get_relevant_documents(query)
-            return [
-                DocumentSearchResult(
-                    content=doc.page_content,
-                    metadata=doc.metadata,
-                    relevance_score=1.0  # Score from vector similarity
-                )
-                for doc in documents
-            ]
-        except Exception as e:
-            self.logger.error(f"Document search failed: {str(e)}")
-            raise GrantSearchError(f"Document search failed: {str(e)}")
+    # Provide read-only access to attributes via properties
+    @property
+    def directory_path(self) -> Path:
+        return self._directory_path
+    
+    @property
+    def logger(self) -> logging.Logger:
+        return self._logger
+    
+    @property
+    def doc_store(self) -> HierarchicalDocumentStore:
+        return self._doc_store
+    
+    @property
+    def previous_context(self) -> Optional[Dict[str, Any]]:
+        return self._previous_context
+    
+    def _ensure_documents_processed(self):
+        """Load and process documents if not already done"""
+        # Check if documents need processing
+        if not (self.directory_path / ".document_store").exists():
+            self.logger.info("Processing documents into hierarchical store...")
+            documents = self._load_documents()
+            self.doc_store.process_documents(documents)
+    
+    def _load_documents(self) -> List[Document]:
+        """Load documents from directory"""
+        documents = []
+        batch_size = int(os.getenv('CHUNK_BATCH_SIZE', 50))
+        current_batch = []
+        for file_path in self.directory_path.glob("**/*"):
+            if file_path.is_file() and not file_path.name.startswith('.'):
+                try:
+                    if len(current_batch) >= batch_size:
+                        documents.extend(current_batch)
+                        current_batch = []
+                    
+                    if file_path.suffix == '.pdf':
+                        from langchain.document_loaders import PyPDFLoader
+                        loader = PyPDFLoader(str(file_path))
+                        current_batch.extend(loader.load())
+                    elif file_path.suffix in ['.docx', '.doc']:
+                        from langchain.document_loaders import Docx2txtLoader
+                        loader = Docx2txtLoader(str(file_path))
+                        current_batch.extend(loader.load())
+                except Exception as e:
+                    self.logger.error(f"Error loading {file_path}: {str(e)}")
         
+        if current_batch:
+            documents.extend(current_batch)
+        return documents
+    
+    def _create_summary(self, chunks: List[Document], level: str) -> str:
+        """Create summary using configured LLM"""
+        # Combine chunk content
+        combined_text = "\n\n".join(chunk.page_content for chunk in chunks)
+        
+        # Create prompt based on level
+        if level == "high":
+            prompt = f"Create a high-level executive summary of these documents:\n\n{combined_text}"
+        elif level == "mid":
+            prompt = f"Create a detailed summary of these documents, focusing on key technical details:\n\n{combined_text}"
+        else:
+            return combined_text  # No summary for low level
+            
+        # Get response from LLM
+        response = self.llm.predict(prompt)
+        return response
+    
+    def _run(self, query: str) -> Dict[str, Any]:
+        """Run hierarchical document analysis"""
+        try:
+            # Get results from all layers with proper context
+            results = self.doc_store.multi_layer_query(query)
+            
+            # Process results by layer with context preservation
+            processed_results = {
+                "high_level": {
+                    "summary": self._process_layer_results(results["high"], "high"),
+                    "context": self.doc_store.layers["high"].summaries
+                },
+                "mid_level": {
+                    "details": self._process_layer_results(results["mid"], "mid"),
+                    "context": self.doc_store.layers["mid"].summaries
+                },
+                "low_level": {
+                    "specifics": self._process_layer_results(results["low"], "low")
+                }
+            }
+            
+            # Add cross-references between layers
+            self._add_cross_references(processed_results)
+            
+            return processed_results
+            
+        except Exception as e:
+            self.logger.error(f"Error in document analysis: {str(e)}")
+            raise
+    
+    def _process_layer_results(self, docs: List[Document], layer: str) -> List[Dict[str, Any]]:
+        """Process results from a specific layer"""
+        processed = []
+        for doc in docs:
+            processed.append({
+                "content": doc.page_content,
+                "metadata": doc.metadata,
+                "summary": self.doc_store.layers[layer].summaries.get(doc.metadata.get("group_id")) if layer != "low" else None
+            })
+        return processed
+    
+    def _add_cross_references(self, results: Dict[str, Any]):
+        """Add cross-references between different layers"""
+        # Link high-level concepts to mid-level details
+        for high_item in results["high_level"]["summary"]:
+            high_item["related_details"] = []
+            for mid_item in results["mid_level"]["details"]:
+                if self._are_related(high_item["content"], mid_item["content"]):
+                    high_item["related_details"].append(mid_item["id"])
+        
+        # Link mid-level details to specific examples
+        for mid_item in results["mid_level"]["details"]:
+            mid_item["specific_examples"] = []
+            for low_item in results["low_level"]["specifics"]:
+                if self._are_related(mid_item["content"], low_item["content"]):
+                    mid_item["specific_examples"].append(low_item["id"])
+    
+    def _are_related(self, text1: str, text2: str) -> bool:
+        """Determine if two pieces of text are semantically related"""
+        emb1 = self.doc_store.embeddings.embed_query(text1)
+        emb2 = self.doc_store.embeddings.embed_query(text2)
+        similarity = np.dot(emb1, emb2)
+        return similarity > float(os.getenv('SIMILARITY_THRESHOLD', 0.7))
+    
+    def __del__(self):
+        """Cleanup when tool is destroyed"""
+        if hasattr(self, 'doc_store'):
+            try:
+                self.doc_store.cleanup()
+            except Exception as e:
+                self.logger.error(f"Error during tool cleanup: {str(e)}")
+
 class GrantCrawler(BaseTool):
     """Manages crawling of funding source websites"""
     name: str = Field(default="grant_crawler", description="Tool for crawling grant websites")

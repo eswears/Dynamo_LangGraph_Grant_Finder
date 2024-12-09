@@ -1,178 +1,373 @@
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+import logging
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+import numpy as np
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain.docstore.document import Document
 import json
-import hashlib
+import os
+from dotenv import load_dotenv
+from grant_finder.models.bitnet import BitNetEmbeddings
+from grant_finder.models.bitnet import BitNetLLM
 from datetime import datetime
 
-from langchain_community.document_loaders import (
-    PyPDFLoader, UnstructuredFileLoader, DirectoryLoader
-)
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_openai import OpenAIEmbeddings  # Update this import at the top of the file
-from langchain.docstore.document import Document
-from langchain.retrievers import ParentDocumentRetriever
-from langchain.storage import LocalFileStore
-from langchain_core.documents import Document
+load_dotenv()
 
-class DocumentStoreManager:
-    """Manages document indexing and retrieval for company knowledge base"""
+@dataclass
+class DocumentLayer:
+    """Represents a layer in the hierarchical document store"""
+    name: str
+    chunk_size: int
+    chunk_overlap: int
+    vector_store: Optional[FAISS] = None
+    summaries: Dict[str, str] = None
+    metadata: Dict[str, Any] = None
+
+class HierarchicalDocumentStore:
+    """Manages document storage and retrieval across multiple abstraction layers"""
     
-    def __init__(
-        self,
-        docs_dir: Path,
-        storage_dir: Path,
-        embeddings_model: Optional[OpenAIEmbeddings] = None
-    ):
-        self.docs_dir = Path(docs_dir)
-        if not self.docs_dir.exists():
-            raise ValueError(f"Documents directory does not exist: {self.docs_dir}")
-        if not self.docs_dir.is_dir():
-            raise ValueError(f"Path is not a directory: {self.docs_dir}")
+    def __init__(self, base_path: Path, logger: logging.Logger, config: Dict, llm: Optional[BitNetLLM] = None, previous_context: Optional[Dict[str, Any]] = None):
+        self.base_path = base_path
+        self.logger = logger
+        self.config = config
         
-        # Create storage directory if it doesn't exist
-        self.storage_dir = Path(storage_dir)
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        # Check previous embeddings provider if context exists
+        previous_provider = None
+        if previous_context and "embedding_provider" in previous_context:
+            previous_provider = previous_context["embedding_provider"]
         
-        # Create index directory if it doesn't exist
-        self.index_dir = storage_dir / "indices"
-        self.index_dir.mkdir(parents=True, exist_ok=True)
+        # Get current config
+        current_provider = config["embeddings"]["provider"]
+        self.embeddings_base_path = Path(config["embeddings"]["save_path"])
         
-        self.metadata_path = storage_dir / "document_metadata.json"
-        self.embeddings = embeddings_model or OpenAIEmbeddings()
+        # If providers don't match, prompt user
+        if previous_provider and previous_provider != current_provider:
+            response = input(f"Warning: Previous embeddings used {previous_provider} but current config specifies {current_provider}.\n"
+                            f"Enter 'reprocess' to create new embeddings or 'switch' to use {previous_provider}: ")
+            if response.lower() == "reprocess":
+                # Clear previous context to force reprocessing
+                previous_context = None
+            elif response.lower() == "switch":
+                current_provider = previous_provider
+            else:
+                raise ValueError("Invalid response. Must be 'reprocess' or 'switch'")
         
-        # Initialize or load document metadata
-        self.document_metadata = self._load_metadata()
+        # Initialize embeddings based on provider
+        if current_provider == "openai":
+            self.embeddings = OpenAIEmbeddings(
+                model=config["embeddings"]["openai"]["model"],
+                # Remove cache_size as it's not supported in current version
+                model_kwargs={}
+            )
+        elif current_provider == "gptj":
+            model_path = config["embeddings"]["gptj"]["model_path"]
+            self.embeddings = GPTJ4AllEmbeddings(
+                model_path=model_path,
+                logger=logger
+            )
+        else:
+            raise ValueError(f"Unknown embeddings provider: {current_provider}")
         
-        # Setup document splitting
-        self.parent_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2000,
-            chunk_overlap=200,
-            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
-        )
+        # Store provider for future reference
+        self.embedding_provider = current_provider
         
-        self.child_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=400,
-            chunk_overlap=100,
-            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
-        )
-        
-        # Initialize retriever
-        self.store = LocalFileStore(self.storage_dir / "chunks")
-        self.retriever = self._initialize_retriever()
-
-    def _load_metadata(self) -> Dict:
-        """Load or initialize document metadata"""
-        if self.metadata_path.exists():
-            with open(self.metadata_path, 'r') as f:
-                return json.load(f)
-        return {
-            "indexed_files": {},
-            "last_update": None
-        }
-
-    def _save_metadata(self):
-        """Save current document metadata"""
-        self.document_metadata["last_update"] = datetime.now().isoformat()
-        with open(self.metadata_path, 'w') as f:
-            json.dump(self.document_metadata, f, indent=2)
-
-    def _get_file_hash(self, file_path: Path) -> str:
-        """Generate hash of file contents"""
-        sha256_hash = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
-
-    def _initialize_retriever(self) -> ParentDocumentRetriever:
-        """Initialize or load the retriever with existing indices"""
-        vectorstore = FAISS.load_local(
-            self.index_dir / "faiss_index",
-            self.embeddings,
-            allow_dangerous_deserialization=True
-        ) if (self.index_dir / "faiss_index").exists() else FAISS.from_documents(
-            [Document(page_content="", metadata={})],  # Initialize empty
-            self.embeddings
-        )
-        
-        return ParentDocumentRetriever(
-            vectorstore=vectorstore,
-            docstore=self.store,
-            child_splitter=self.child_splitter,
-            parent_splitter=self.parent_splitter,
-        )
-
-    def update_document_index(self) -> List[str]:
-        """Update indices for new or modified documents"""
-        new_or_modified = []
-        
-        # Scan all documents in directory
-        for file_path in self.docs_dir.rglob("*"):
-            if not file_path.is_file() or file_path.suffix.lower() not in ['.pdf', '.txt', '.docx']:
-                continue
-                
-            file_hash = self._get_file_hash(file_path)
-            rel_path = str(file_path.relative_to(self.docs_dir))
-            
-            # Check if file is new or modified
-            if (rel_path not in self.document_metadata["indexed_files"] or 
-                self.document_metadata["indexed_files"][rel_path]["hash"] != file_hash):
-                
-                # Load and process document
-                if file_path.suffix.lower() == '.pdf':
-                    loader = PyPDFLoader(str(file_path))
-                else:
-                    loader = UnstructuredFileLoader(str(file_path))
-                
-                documents = loader.load()
-                
-                # Convert documents to bytes for storage
-                serializable_docs = []
-                for i, doc in enumerate(documents):
-                    doc_dict = {
-                        "page_content": doc.page_content,
-                        "metadata": doc.metadata
-                    }
-                    # Convert to bytes and add as tuple with safe key
-                    doc_bytes = json.dumps(doc_dict).encode('utf-8')
-                    # Create safe key by replacing spaces and special chars
-                    safe_key = rel_path.replace(' ', '_').replace('.', '_').replace('-', '_')
-                    safe_key = f"doc_{safe_key}_{i}"
-                    serializable_docs.append((safe_key, doc_bytes))
-                
-                # Add documents to retriever's docstore
-                self.retriever.docstore.mset(serializable_docs)
-                
-                # Add to vectorstore
-                self.retriever.vectorstore.add_documents(documents)
-                
-                # Update metadata
-                self.document_metadata["indexed_files"][rel_path] = {
-                    "hash": file_hash,
-                    "last_indexed": datetime.now().isoformat(),
-                    "size": file_path.stat().st_size
-                }
-                
-                new_or_modified.append(rel_path)
-        
-        # Save updated indices and metadata
-        if new_or_modified:
-            self.retriever.vectorstore.save_local(self.index_dir / "faiss_index")
-            self._save_metadata()
-        
-        return new_or_modified
-
-    def get_relevant_documents(self, query: str, max_documents: int = 5) -> List[Document]:
-        """Retrieve relevant documents for a query"""
-        return self.retriever.invoke(query, config={"max_documents": max_documents})
-
-    def get_document_stats(self) -> Dict:
-        """Get statistics about indexed documents"""
-        return {
-            "total_documents": len(self.document_metadata["indexed_files"]),
-            "total_size": sum(
-                info["size"] for info in self.document_metadata["indexed_files"].values()
+        # Define the hierarchical layers using env vars
+        self.layers = {
+            "high": DocumentLayer(
+                "high", 
+                int(os.getenv('HIGH_LEVEL_CHUNK_SIZE', 3000)),
+                int(float(os.getenv('CHUNK_OVERLAP_RATIO', 0.1)) * int(os.getenv('HIGH_LEVEL_CHUNK_SIZE', 3000)))
             ),
-            "last_update": self.document_metadata["last_update"]
+            "mid": DocumentLayer(
+                "mid", 
+                int(os.getenv('MID_LEVEL_CHUNK_SIZE', 1500)),
+                int(float(os.getenv('CHUNK_OVERLAP_RATIO', 0.1)) * int(os.getenv('MID_LEVEL_CHUNK_SIZE', 1500)))
+            ),
+            "low": DocumentLayer(
+                "low", 
+                int(os.getenv('LOW_LEVEL_CHUNK_SIZE', 500)),
+                int(float(os.getenv('CHUNK_OVERLAP_RATIO', 0.1)) * int(os.getenv('LOW_LEVEL_CHUNK_SIZE', 500)))
+            )
         }
+        
+        # Restore previous context if available
+        if previous_context:
+            self._restore_context(previous_context)
+        
+        # Initialize document storage
+        self._initialize_stores()
+    
+    def _initialize_stores(self):
+        """Initialize vector stores for each layer"""
+        store_path = self.embeddings_base_path / self.embedding_provider
+        store_path.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize empty stores for each layer if they don't exist
+        for layer_name, layer in self.layers.items():
+            layer_path = store_path / layer_name
+            # Try to load existing store first
+            if layer_path.exists():
+                try:
+                    layer.vector_store = FAISS.load_local(
+                        str(layer_path), 
+                        self.embeddings,
+                        allow_dangerous_deserialization=True
+                    )
+                    self.logger.info(f"Loaded existing {layer_name} layer store from {layer_path}")
+                except Exception as e:
+                    self.logger.warning(f"Could not load existing store for {layer_name}: {str(e)}")
+                    layer.vector_store = None
+            
+            # Create new store if needed
+            if layer.vector_store is None:
+                layer.vector_store = FAISS.from_texts(
+                    ["initialization"], 
+                    self.embeddings,
+                    metadatas=[{"source": "initialization"}]
+                )
+                # Save immediately after creation
+                try:
+                    layer_path.parent.mkdir(parents=True, exist_ok=True)
+                    layer.vector_store.save_local(str(layer_path))
+                    self.logger.info(f"Created new {layer_name} layer store at {layer_path}")
+                except Exception as e:
+                    self.logger.error(f"Error saving {layer_name} layer store: {str(e)}")
+
+            if not layer_path.exists():
+                layer.vector_store.save_local(str(layer_path))
+                self.logger.info(f"Created new {layer_name} layer store at {layer_path}")
+        
+        # Check for existing embeddings metadata
+        metadata_path = store_path / "embeddings_metadata.json"
+        if metadata_path.exists():
+            with open(metadata_path, 'r') as f:
+                stored_metadata = json.load(f)
+                stored_provider = stored_metadata.get("provider")
+                
+                if stored_provider != self.embedding_provider:
+                    response = input(
+                        f"\nWarning: Existing embeddings were created using {stored_provider} but current config specifies {self.embedding_provider}.\n"
+                        f"Options:\n"
+                        f"1. 'reprocess' - Create new embeddings with {self.embedding_provider}\n"
+                        f"2. 'switch' - Switch to using {stored_provider}\n"
+                        f"Enter choice (1/2): "
+                    )
+                    
+                    if response == "1":
+                        self.logger.info(f"Reprocessing with {self.embedding_provider}")
+                        # Delete existing stores to force reprocessing
+                        for layer_name in self.layers:
+                            layer_path = store_path / layer_name
+                            if layer_path.exists():
+                                import shutil
+                                shutil.rmtree(layer_path)
+                    elif response == "2":
+                        self.logger.info(f"Switching to {stored_provider}")
+                        self.embedding_provider = stored_provider
+                        # Reinitialize embeddings with stored provider
+                        if stored_provider == "openai":
+                            self.embeddings = OpenAIEmbeddings(
+                                cache_size=os.getenv('EMBEDDINGS_CACHE_SIZE', '1G')
+                            )
+                        elif stored_provider == "bitnet":
+                            if not hasattr(self, 'llm') or not self.llm:
+                                raise ValueError("BitNet LLM required for BitNet embeddings")
+                            self.embeddings = BitNetEmbeddings(self.llm.model_config_, self.logger)
+                        # Update store path for switched provider
+                        store_path = self.embeddings_base_path / self.embedding_provider
+                        store_path.mkdir(parents=True, exist_ok=True)
+                    else:
+                        raise ValueError("Invalid choice. Must be '1' or '2'")
+
+        for layer_name, layer in self.layers.items():
+            layer_path = store_path / layer_name
+            if layer_path.exists():
+                layer.vector_store = FAISS.load_local(
+                    str(layer_path), 
+                    self.embeddings,
+                    allow_dangerous_deserialization=True  # Only enable this for trusted, local files
+                )
+                self.logger.info(f"Loaded existing {layer_name} layer store from {layer_path}")
+            else:
+                self.logger.info(f"Will create new {layer_name} layer store at {layer_path}")
+        
+        # Save current embeddings metadata
+        with open(metadata_path, 'w') as f:
+            json.dump({
+                "provider": self.embedding_provider,
+                "timestamp": datetime.now().isoformat()
+            }, f, indent=2)
+    
+    def _create_chunks(self, documents: List[Document], layer: DocumentLayer) -> List[Document]:
+        """Create chunks for a specific layer"""
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=layer.chunk_size,
+            chunk_overlap=layer.chunk_overlap,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+        return splitter.split_documents(documents)
+    
+    def _create_summary(self, chunks: List[Document], level: str) -> str:
+        """Create a summary for a group of chunks"""
+        # Combine chunk content
+        combined_text = "\n\n".join(chunk.page_content for chunk in chunks)
+        
+        # Create prompt based on level
+        if level == "high":
+            prompt = """Create a high-level executive summary of these documents, focusing on:
+            - Key company capabilities
+            - Main technical focus areas
+            - Overall strategic direction
+            
+            Keep the summary concise and focused on the most important points."""
+            
+        elif level == "mid":
+            prompt = """Create a detailed technical summary of these documents, focusing on:
+            - Specific technical capabilities
+            - Implementation details
+            - Project examples and use cases
+            
+            Include important technical details while maintaining clarity."""
+            
+        else:  # low level
+            return combined_text  # Return raw content for lowest level
+        
+        # Get embeddings for the summary
+        summary_embedding = self.embeddings.embed_query(combined_text)
+        
+        # Store the summary with its embedding
+        if level != "low":
+            layer = self.layers[level]
+            if layer.summaries is None:
+                layer.summaries = {}
+            
+            # Generate unique ID for this summary
+            summary_id = f"summary_{len(layer.summaries)}"
+            layer.summaries[summary_id] = {
+                "text": combined_text,
+                "embedding": summary_embedding
+            }
+        
+        return combined_text
+    
+    def process_documents(self, documents: List[Document]):
+        """Process documents into hierarchical layers"""
+        total_layers = len(self.layers)
+        processed_layers = 0
+        
+        try:
+            for layer_name, layer in self.layers.items():
+                self.logger.info(f"Processing {layer_name} layer ({processed_layers + 1}/{total_layers})...")
+                
+                total_chunks = 0
+                processed_chunks = 0
+                
+                try:
+                    chunks = self._create_chunks(documents, layer)
+                    total_chunks = len(chunks)
+                    
+                    # Create vector store if needed
+                    if layer.vector_store is None:
+                        layer.vector_store = FAISS.from_documents(chunks, self.embeddings)
+                        layer.vector_store.save_local(str(self.base_path / ".document_store" / layer_name))
+                    else:
+                        layer.vector_store.add_documents(chunks)
+                    
+                    # Create summaries for chunks
+                    if layer_name != "low":  # Don't summarize lowest layer
+                        layer.summaries = {}
+                        for i, chunk_group in enumerate(chunks):
+                            try:
+                                summary = self._create_summary([chunk_group], layer_name)
+                                layer.summaries[f"group_{i}"] = summary
+                                processed_chunks += 1
+                                self.logger.debug(f"Processed chunk {processed_chunks}/{total_chunks} in {layer_name} layer")
+                            except Exception as e:
+                                self.logger.error(f"Error creating summary for chunk {i} in {layer_name} layer: {str(e)}")
+                                continue
+                    
+                    processed_layers += 1
+                    self.logger.info(f"Successfully processed {layer_name} layer ({processed_layers}/{total_layers})")
+                    
+                except Exception as e:
+                    self.logger.error(f"Error processing {layer_name} layer: {str(e)}")
+                    continue
+                
+        except Exception as e:
+            self.logger.error(f"Error in document processing: {str(e)}")
+            raise
+    
+    def query(self, query: str, layer: str = "high", k: int = 4) -> List[Document]:
+        """Query a specific layer of the document store"""
+        if layer not in self.layers:
+            raise ValueError(f"Invalid layer: {layer}")
+            
+        layer_store = self.layers[layer].vector_store
+        if layer_store is None:
+            raise RuntimeError(f"Layer {layer} not initialized")
+            
+        return layer_store.similarity_search(query, k=k)
+    
+    def multi_layer_query(self, query: str, k: int = 4) -> Dict[str, List[Document]]:
+        """Query all layers and return combined results"""
+        results = {}
+        for layer_name in self.layers.keys():
+            results[layer_name] = self.query(query, layer=layer_name, k=k)
+        return results
+    
+    def _restore_context(self, context: Optional[Dict[str, Any]]) -> None:
+        """Restore previous context to layers"""
+        if context is None or "layer_states" not in context:
+            return
+            
+        for layer_name, layer_state in context["layer_states"].items():
+            if layer_name in self.layers:
+                self.layers[layer_name].summaries = layer_state.get("summaries", {})
+                self.layers[layer_name].metadata = layer_state.get("metadata", {})
+    
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            for layer in self.layers.values():
+                if layer.vector_store is not None:
+                    # Save store before clearing
+                    layer_path = self.embeddings_base_path / self.embedding_provider / layer.name
+                    layer.vector_store.save_local(str(layer_path))
+                    # Clear references
+                    layer.vector_store = None
+                    layer.summaries = {}
+            
+            # Clear embeddings model
+            if hasattr(self.embeddings, 'model'):
+                if hasattr(self.embeddings.model, 'cleanup'):
+                    self.embeddings.model.cleanup()
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Save context to temporary file using provider-specific path
+            store_path = self.embeddings_base_path / self.embedding_provider
+            temp_context_path = store_path / "temp_context.json"
+            with open(temp_context_path, 'w') as f:
+                json.dump(context, f, indent=2)
+            
+            # Cleanup resources
+            for layer in self.layers.values():
+                if layer.vector_store is not None:
+                    layer_path = store_path / layer.name
+                    layer.vector_store.save_local(str(layer_path))
+                    layer.vector_store = None
+            
+            # Clear embeddings and model resources
+            if hasattr(self.embeddings, 'model'):
+                if hasattr(self.embeddings.model, 'cleanup'):
+                    self.embeddings.model.cleanup()
+                if hasattr(self.embeddings.model, 'reset'):
+                    self.embeddings.model.reset()
+                    
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {str(e)}")

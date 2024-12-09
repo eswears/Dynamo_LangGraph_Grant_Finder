@@ -7,6 +7,14 @@ from pathlib import Path
 from langchain_core.runnables import RunnableConfig
 # Update imports to use Pydantic v2
 from pydantic import BaseModel, Field, ConfigDict
+from dataclasses import dataclass, field
+
+@dataclass
+class LayerContext:
+    """Context for a specific layer in hierarchical RAG"""
+    summaries: Dict[str, str] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    relationships: Dict[str, List[str]] = field(default_factory=dict)
 
 # Existing Pydantic models remain the same
 class AgentConfig(BaseModel):
@@ -16,6 +24,15 @@ class AgentConfig(BaseModel):
     backstory: str = Field(..., description="Background and expertise of the agent")
 
 # New state management types for LangGraph
+class CompanyDocumentToolConfig(BaseModel):
+    """Configuration model for CompanyDocumentTool"""
+    directory_path: Path = Field(..., description="Path to directory containing company documents")
+    logger: Any = Field(..., description="Logger instance")  
+    llm: Any = Field(..., description="Language model instance")
+    config: Dict[str, Any] = Field(..., description="Configuration dictionary")
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
 class CompanyProfileState(BaseModel):
     vision: str = Field(default="", description="Company vision and mission")
     technical_focus: str = Field(default="", description="Company's technical focus areas")
@@ -52,10 +69,18 @@ class FundingSourceState(BaseModel):
     grants_found: List[GrantOpportunityState] = Field(default_factory=list)
     search_timestamp: Optional[str] = None
 
+class SearchProgress(BaseModel):
+    sources_searched: List[str] = Field(default_factory=list)
+    total_sources: int = Field(default=0)
+    successful_searches: int = Field(default=0)
+    failed_searches: int = Field(default=0)
+
 # Main graph state
 class GrantFinderState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+    search_progress: SearchProgress = Field(default_factory=SearchProgress)
+
+
     messages: Sequence[BaseMessage] = Field(default_factory=list)
     company_profile: CompanyProfileState = Field(default_factory=CompanyProfileState)
     search_requirements: SearchRequirementsState = Field(default_factory=SearchRequirementsState)
@@ -70,6 +95,8 @@ class GrantFinderState(BaseModel):
     chat_history: List[Dict[str, Any]] = Field(default_factory=list)
     searched_websites: set[str] = Field(default_factory=set)
     search_history: List[Dict[str, Any]] = Field(default_factory=list)
+    context_history: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    layer_states: Dict[str, LayerContext] = Field(default_factory=dict)
     
     # Fix the search_progress type to use proper nested structure
     search_progress: Dict[str, Any] = Field(
@@ -240,3 +267,10 @@ class FinalReportInput(BaseModel):
 class FinalReportOutput(BaseModel):
     final_report: Dict[str, Any]
     errors: List[str] = Field(default_factory=list)
+
+@dataclass
+class HierarchicalResult:
+    high_level: Dict[str, Any]
+    mid_level: Dict[str, Any]
+    low_level: Dict[str, Any]
+    cross_references: Dict[str, List[str]]

@@ -55,7 +55,22 @@ class ProfileAnalysisNode:
         self.logger = logger
         self.llm = llm
         self.company_context_path = company_context_path
-        self.tool = CompanyDocumentTool(company_context_path, logger)
+        # Initialize tool with all required fields
+        self.tool = CompanyDocumentTool(
+            directory_path=Path(company_context_path),
+            logger=logger,
+            llm=llm,
+            config={
+                "embeddings": {
+                    "provider": "bitnet",
+                    "save_path": str(Path(company_context_path) / "embeddings"),
+                    "bitnet": {
+                        "dimension": 1536,
+                        "batch_size": 32
+                    }
+                }
+            }
+        )
         
         # Load agent and task configs - store for use in __call__
         self.agent_config = load_agent_config()['company_profiler']
@@ -68,94 +83,50 @@ class ProfileAnalysisNode:
     def __call__(self, state: GrantFinderState) -> GrantFinderState:
         try:
             self.logger.info("Starting company profile analysis")
-            
-            # Define tools information properly
-            tools = [self.tool]
-            tool_names = [tool.name for tool in tools]
-            tools_desc = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
-            
-            # Create prompt template with state-dependent variables
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
-                Background: {self.agent_config['backstory']}
-                Goal: {self.agent_config['goal']}
-                
-                Task: {self.task_config['description']}
-                Expected Output: {self.task_config['expected_output']}
-                
-                IMPORTANT: Your response MUST be in this format:
-                ```json
-                {{{{
-                    "vision": "company vision here",
-                    "technical_focus": "technical focus here",
-                    "website": "website url here",
-                    "sbir_experience": "sbir experience here",
-                    "innovations": "innovations here",
-                    "technical_experience": "technical experience here"
-                }}}}
-                ```"""),
-                ("user", "{input}"),
-                ("assistant", "{agent_scratchpad}"),
-                ("system", "Available tools:\n{tools}"),
-            ])
-            
-            # Create agent with current prompt and properly formatted tools
-            agent = create_structured_chat_agent(
-                llm=self.llm,
-                tools=tools,
-                prompt=prompt.partial(
-                    tools=tools_desc,
-                    tool_names=tool_names
-                )
-            )
-            
-            # Add handle_parsing_errors=True to AgentExecutor
-            executor = AgentExecutor(
-                agent=agent, 
-                tools=tools,
-                handle_parsing_errors=True,
-                max_iterations=3
-            )
-            
-            # Convert Path objects to strings
-            input_data = ProfileAnalysisInput(
-                company_documents=[str(p) for p in Path(self.company_context_path).glob("*")],
-                config=state.config
-            )
-
-            result = executor.invoke({
-                "input": {
-                    "query": "Analyze company documents to extract complete profile",
-                    "documents": input_data.company_documents,
-                    "requirements": self.task_config['description']
+            input_data = {
+                "profile_data": state.company_profile.dict(),
+                "company_focus": state.company_focus,
+                "config": state.config
+            }
+            try:
+                doc_results = self.tool._run(json.dumps(input_data))
+            except Exception as e:
+                state.errors.append(f"Document analysis failed: {str(e)}")
+                # Provide minimal valid results to allow workflow to continue
+                doc_results = {
+                    "high_level": {"summary": []},
+                    "mid_level": {"details": []},
+                    "low_level": {"specifics": []}
                 }
-            })
             
-            # Validate output
-            output_data = ProfileAnalysisOutput(
-                company_profile=CompanyProfileState(
-                    vision=result.get("vision", ""),
-                    technical_focus=result.get("technical_focus", ""),
-                    website=result.get("website", ""),
-                    sbir_experience=result.get("sbir_experience", ""),
-                    innovations=result.get("innovations", ""),
-                    technical_experience=result.get("technical_experience", "")
-                )
+            # Use high-level summary for vision and overall focus
+            high_level = doc_results["high_level"]["summary"]
+            state.company_profile.vision = high_level[0]["content"] if high_level else ""
+            
+            # Use mid-level details for technical capabilities
+            mid_level = doc_results["mid_level"]["details"]
+            state.company_profile.technical_focus = "\n".join(
+                detail["content"] for detail in mid_level
             )
-            # Update state with profile information
-            state.company_profile = output_data.company_profile
-
+            
+            # Use specific examples for experience and innovations
+            low_level = doc_results["low_level"]["specifics"]
+            state.company_profile.technical_experience = "\n".join(
+                example["content"] for example in low_level
+                if "experience" in example["content"].lower()
+            )
+            
+            state.company_profile.innovations = "\n".join(
+                example["content"] for example in low_level
+                if "innovation" in example["content"].lower()
+            )
+            
             return state
             
-        except ValidationError as e:
-            self.logger.error(f"Profile analysis validation failed: {str(e)}")
-            state.errors.append(f"Profile analysis validation error: {str(e)}")
-            return state
         except Exception as e:
-            error_msg = f"Profile analysis failed: {str(e)}"
-            self.logger.error(error_msg)
-            state.errors.append(error_msg)
-            raise RuntimeError(error_msg)
+            self.logger.error(f"Profile analysis failed: {str(e)}")
+            state.errors.append(f"Profile analysis error: {str(e)}")
+            return state
 
 class StrategyDevelopmentNode:
     def __init__(self, logger: logging.Logger, llm: BaseLanguageModel):
@@ -176,97 +147,33 @@ class StrategyDevelopmentNode:
     def __call__(self, state: GrantFinderState) -> GrantFinderState:
         try:
             self.logger.info("Starting strategy development")
-            self.logger.info(f"Input state company profile: {json.dumps(state.company_profile.model_dump(), indent=2)}")
-            self.logger.info(f"Input state config: {json.dumps(state.config, indent=2)}")
             
-            # Format task description and output with state variables
-            self.task_config['description'] = self.task_config['description'].replace("{company_focus}", f"{state.config['company_focus']}")
-            self.task_config['expected_output'] = self.task_config['expected_output'].replace("{company_focus}", f"{state.config['company_focus']}")
+            # Get hierarchical analysis with context
+            doc_results = self.tool._run("Analyze strategic capabilities and requirements")
             
-            self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
+            # Use high-level summary for overall strategy
+            high_level = doc_results["high_level"]
+            strategic_focus = high_level["summary"][0]["content"]
             
-            # Define tools information properly
-            tools = [self.tool]
-            tool_names = [tool.name for tool in tools]
-            tools_desc = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
+            # Use mid-level details for specific requirements
+            mid_level = doc_results["mid_level"]
+            technical_requirements = [
+                detail["content"] 
+                for detail in mid_level["details"]
+                if "requirement" in detail["content"].lower()
+            ]
             
-            # Create prompt template with state-dependent variables and JSON format
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", f"""You are {self.agent_config['name']}, {self.agent_config['role']}.
-                Background: {self.agent_config['backstory']}
-                Goal: {self.agent_config['goal']}
-                
-                Task: {self.task_config['description']}
-                
-                IMPORTANT: Your response MUST be in this exact JSON format:
-                ```json
-                {{{{
-                    "technical_requirements": ["requirement1", "requirement2"],
-                    "innovation_areas": ["area1", "area2"],
-                    "competitive_advantages": ["advantage1", "advantage2"],
-                    "target_phases": ["phase1", "phase2"]
-                }}}}
-                ```"""),
-                ("user", "{input}"),
-                ("assistant", "{agent_scratchpad}"),
-                ("system", "Available tools:\n{tools}")
-            ])
-            
-            # Create agent with properly formatted tools
-            agent = create_structured_chat_agent(
-                llm=self.llm,
-                tools=tools,
-                prompt=prompt.partial(
-                    tools=tools_desc,
-                    tool_names=tool_names
-                )
-            )
-            self.executor = AgentExecutor(
-                agent=agent,
-                tools=tools,
-                handle_parsing_errors=True,
-                max_iterations=3
-            )
-            
-            # Create properly formatted input for the tool
-            tool_input = {
-                "profile_data": {
-                    "technical_focus": state.company_profile.technical_focus,
-                    "vision": state.company_profile.vision,
-                    "sbir_experience": state.company_profile.sbir_experience,
-                    "innovations": state.company_profile.innovations,
-                    "technical_experience": state.company_profile.technical_experience
-                },
-                "company_focus": state.config["company_focus"],
-                "organization_focus": state.config["organization_focus"]
+            # Use cross-references to maintain context
+            state.search_requirements.technical_requirements = technical_requirements
+            state.search_requirements.context = {
+                "high_level": high_level["context"],
+                "mid_level": mid_level["context"]
             }
             
-            result = self.executor.invoke({
-                "input": f"Create strategic requirements for: {json.dumps(tool_input)}",
-                "agent_scratchpad": ""
-            })     
-
-            # Validate output
-            output_data = StrategyDevelopmentOutput(
-                search_requirements=SearchRequirementsState(
-                    technical_requirements=result.get("technical_requirements", []),
-                    innovation_areas=result.get("innovation_areas", []),
-                    competitive_advantages=result.get("competitive_advantages", []),
-                    target_phases=result.get("target_phases", [])
-                )
-            )
-            
-            state.search_requirements = output_data.search_requirements
             return state
             
-        except ValidationError as e:
-            self.logger.error(f"Strategy development validation failed: {str(e)}")
-            self.logger.error(f"Validation error details: {e.errors()}")
-            state.errors.append(f"Strategy development validation error: {str(e)}")
-            return state
         except Exception as e:
             self.logger.error(f"Strategy development failed: {str(e)}")
-            self.logger.error(f"Error details: {str(e)}", exc_info=True)
             state.errors.append(f"Strategy development error: {str(e)}")
             return state
 
@@ -510,7 +417,12 @@ class GrantSearchNode:
             
             self.logger.info(f"Task config: {json.dumps(self.task_config, indent=2)}")
             
-            # Validate input state
+            if not hasattr(state, 'config'):
+                state.config = {}
+
+            state.config['company_focus'] = state.company_focus
+            state.config['organization_focus'] = state.grant_org
+
             input_data = GrantSearchInput(
                 search_requirements=state.search_requirements,
                 company_profile=state.company_profile,

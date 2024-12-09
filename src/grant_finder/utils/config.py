@@ -25,8 +25,13 @@ def validate_paths(config: Dict[str, Any]) -> None:
         ("output.output_directory", "Output directory")
     ]
     
+    # Add GPT-J specific path validation
+    if config.get('embeddings', {}).get('provider') == 'gptj':
+        model_path = config.get('embeddings', {}).get('gptj', {}).get('model_path')
+        if not model_path or not Path(model_path).exists():
+            raise ValidationError(f"GPT-J model not found at: {model_path}")
+    
     for path_key, description in required_paths:
-        # Navigate nested dictionary using path_key
         current = config
         for key in path_key.split('.'):
             current = current.get(key, {})
@@ -62,36 +67,18 @@ def load_user_config() -> UserInputConfig:
         raise
 
 def get_llm_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Get LLM configuration based on the model type"""
-    model_type = config.get("llm", {}).get("model_type", "openai")
-    llm_config = config.get("llm", {})
+    """Get LLM configuration from main config"""
+    model_type = config.get('llm', {}).get('model_type', 'openai')
     
-    if model_type == "openai":
-        openai_config = llm_config.get("openai", {})
-        return {
-            "model_name": openai_config.get("model_name", "gpt-3.5-turbo-0125"),
-            "temperature": openai_config.get("temperature", 0.0),
-            "request_timeout": openai_config.get("request_timeout", 180),
-            "max_tokens": openai_config.get("max_tokens", 500),
-            "max_retries": openai_config.get("max_retries", 3),
-            "concurrency_limit": openai_config.get("concurrency_limit", 2),
-            "backoff_factor": openai_config.get("backoff_factor", 2),
-            "min_delay": openai_config.get("min_delay", 1)
-        }
-    elif model_type == "bitnet":
-        bitnet_config = llm_config.get("bitnet", {})
-        return {
-            "model_path": bitnet_config.get("model_path", "models/bitnet_b1_58-large"),
-            "model_size": bitnet_config.get("model_size", "0.7B"),
-            "quantization": bitnet_config.get("quantization", "i2_s"),
-            "kernel_type": bitnet_config.get("kernel_type", "i2_s"),
-            "threads": bitnet_config.get("threads", 4),
-            "ctx_size": bitnet_config.get("ctx_size", 2048),
-            "temperature": bitnet_config.get("temperature", 0.0),
-            "n_predict": bitnet_config.get("n_predict", 128),
-            "n_prompt": bitnet_config.get("n_prompt", 512),
-            "quant_embd": bitnet_config.get("quant_embd", False),
-            "use_pretuned": bitnet_config.get("use_pretuned", False)
-        }
+    if model_type == 'openai':
+        return config.get('llm', {}).get('openai', {})
+    elif model_type == 'bitnet':
+        bitnet_config = config.get('llm', {}).get('bitnet', {})
+        # Ensure required paths are present
+        if 'cli_path' not in bitnet_config:
+            raise ValueError("BitNet config missing required 'cli_path'")
+        if 'model_path' not in bitnet_config:
+            raise ValueError("BitNet config missing required 'model_path'")
+        return bitnet_config
     else:
-        raise ValueError(f"Unsupported model type: {model_type}")
+        raise ValueError(f"Unknown model type: {model_type}")

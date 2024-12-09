@@ -54,7 +54,6 @@ def setup_logger(
         logger.addHandler(console_handler)
     
     return logger
-
 def setup_logging(
     output_dir: Path,
     timestamp: str

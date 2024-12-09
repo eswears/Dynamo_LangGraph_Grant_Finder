@@ -26,10 +26,11 @@ llm:
   
   # BitNet specific settings
   bitnet:
-    model_path: "models/bitnet_b1_58-large"
-    model_size: "0.7B"  # 0.7B, 3.3B, or 8.0B
-    quantization: "i2_s"  # i2_s or tl1
-    kernel_type: "i2_s"  # i2_s, tl1, or tl2 based on CPU architecture
+    cli_path: "C:/code/Dynamo/shared_codebases/BitNet/build/bin/Release/llama-cli.exe"
+    model_path: "C:/code/Dynamo/models/bitnet_b1_58-large/ggml-model-i2_s.gguf"
+    model_size: "0.7B"
+    quantization: "i2_s"
+    kernel_type: "i2_s"
     threads: 4
     ctx_size: 2048
     temperature: 0.0
@@ -47,3 +48,18 @@ output:
 logging:
   level: "INFO"
   file: "logs/grant_finder.log"
+
+embeddings:
+  provider: "openai"  # openai or "gptj". "bitnet does not have embeddings"
+  save_path: "C:/data/IA_company_context/embeddings"  # Directory to save embeddings with provider info
+  openai:
+    model: "text-embedding-3-small"
+    dimension: 1536
+  bitnet:
+    dimension: 1536
+    batch_size: 32
+  gptj:
+    model_path: "C:/code/Dynamo/models/gptj/gptj-6b-ggml-q4.bin"
+    tokenizer_path: "C:/code/Dynamo/models/gptj/tokenizer"
+    dimension: 4096
+    batch_size: 32

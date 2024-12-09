@@ -9,12 +9,9 @@ A sophisticated LangGraph-based AI system that helps organizations find, analyze
    - [Solution Architecture](#solution-architecture)
    - [System Architecture](#system-architecture)
    - [LangGraph Workflow](#langgraph-workflow)
-   - [Infrastructure Requirements](#infrastructure-requirements)
+   - [Technical Solution Flow](#technical-solution-flow)
 3. [Features](#features)
 4. [Components](#components)
-   - [Agents](#agents)
-   - [Tools](#tools)
-   - [State Management](#state-management)
 5. [Workflow Process](#workflow-process)
 6. [Installation](#installation)
 7. [Configuration](#configuration)
@@ -179,6 +176,315 @@ graph TD
     VC -->|"Failed"| BF
     VC -->|"Success"| GS
 ```
+
+### Technical Solution Flow
+
+#### System Flow Overview
+```mermaid
+graph TD
+    subgraph "Input Layer"
+        CD[Company Documents]
+        UI[User Inputs]
+        PS[Previous State]
+    end
+
+    subgraph "Document Processing Layer"
+        EPV{Embedding Provider Validation}
+        EPC[Previous Context Check]
+        EDC[Existing Document Check]
+        NDP[New Document Processing]
+        VDB[(Vector DB)]
+    end
+
+    subgraph "Analysis Layer"
+        PA[Profile Analysis]
+        SD[Strategy Development]
+        GS[Grant Search]
+        QC[Quality Check]
+        SP[Strategic Planning]
+        FR[Final Report]
+    end
+
+    CD --> EPV
+    UI --> PA
+    PS --> EPC
+    
+    EPV --> EPC
+    EPC --> EDC
+    EDC --> |New Docs| NDP
+    EDC --> |Existing| VDB
+    NDP --> VDB
+    
+    VDB --> PA
+    PA --> SD
+    SD --> GS
+    GS --> QC
+    QC --> |Quality Met| SP
+    QC --> |Needs Refinement| GS
+    SP --> |Gaps Found| GS
+    SP --> |Complete| FR
+```
+
+#### Document Processing Flow
+```mermaid
+graph TD
+    subgraph "Document Input"
+        DI[Raw Documents]
+        PC[Previous Context]
+        EC[Embedding Config]
+    end
+
+    subgraph "Embedding Validation"
+        PEV{Previous Embeddings Valid?}
+        EPT{Switch Provider?}
+        
+        PEV --> |No| EPT
+        EPT --> |Yes| SPE[Switch Provider]
+        EPT --> |No| RPE[Reprocess Embeddings]
+    end
+
+    subgraph "Document Processing"
+        DC{Document Changed?}
+        HL[High Level Processing]
+        ML[Mid Level Processing]
+        LL[Low Level Processing]
+        
+        DC --> |Yes| HL
+        HL --> ML
+        ML --> LL
+    end
+
+    subgraph "Storage Layer"
+        VS[(Vector Store)]
+        PS[Previous State]
+        
+        HL --> VS
+        ML --> VS
+        LL --> VS
+        VS --> PS
+    end
+
+    DI --> PEV
+    PC --> PEV
+    EC --> EPT
+```
+
+## Step-by-Step Process Flow
+
+### 1. Initialization Phase
+- **Configuration Loading**
+  - Load user configuration from `user_config.yaml`
+  - Validate required paths and configurations
+  - Initialize logging system
+
+- **State Management Setup**
+  - Create session ID using timestamp
+  - Initialize GrantFinderState
+  - Load previous context if available
+
+- **Document Store Initialization**
+  ```python
+  HierarchicalDocumentStore(
+      base_path=Path,
+      config=Dict,
+      previous_context=Optional[Dict]
+  )
+  ```
+
+### 2. Document Processing Phase
+- **Embedding Provider Validation**
+  1. Check previous embedding provider
+  2. Compare with current configuration
+  3. Decision tree:
+     - If match: Continue with existing embeddings
+     - If mismatch: Prompt for reprocess or switch
+     - If new: Initialize fresh embeddings
+
+- **Document Processing Flow**
+  1. High-level Processing (chunk_size=3000)
+     ```python
+     {
+         "summary": str,
+         "context": Dict[str, Any],
+         "metadata": Dict[str, Any]
+     }
+     ```
+  2. Mid-level Processing (chunk_size=1500)
+     ```python
+     {
+         "details": List[Dict],
+         "connections": List[str],
+         "metadata": Dict[str, Any]
+     }
+     ```
+  3. Low-level Processing (chunk_size=500)
+     ```python
+     {
+         "specifics": List[Dict],
+         "references": List[str],
+         "metadata": Dict[str, Any]
+     }
+     ```
+
+### 3. Analysis Workflow Phase
+
+#### Profile Analysis Node
+1. Input Processing
+   - Company documents
+   - User focus areas
+   - Configuration context
+
+2. Hierarchical Analysis
+   ```python
+   {
+       "high_level": {
+           "summary": List[Dict],
+           "context": Dict
+       },
+       "mid_level": {
+           "details": List[Dict],
+           "context": Dict
+       },
+       "low_level": {
+           "specifics": List[Dict]
+       }
+   }
+   ```
+
+#### Strategy Development Node
+1. Requirements Analysis
+   ```python
+   {
+       "technical_requirements": List[str],
+       "innovation_areas": List[Dict],
+       "competitive_advantages": List[Dict],
+       "target_phases": List[Dict]
+   }
+   ```
+
+2. Cross-reference Development
+   ```python
+   {
+       "capability_links": List[str],
+       "innovation_connections": List[str],
+       "experience_references": List[str]
+   }
+   ```
+
+#### Grant Search Node
+1. Source Processing
+   ```python
+   for source in funding_sources:
+       search_with_backoff(
+           max_retries=3,
+           exponential_delay=True
+       )
+   ```
+
+2. Validation Pipeline
+   ```python
+   {
+       "topic_id": str,
+       "technical_requirements": List[str],
+       "alignment_score": float,
+       "deadline": datetime,
+       "award_amount": str
+   }
+   ```
+
+#### Quality Check Node
+1. Coverage Analysis
+   ```python
+   {
+       "technical_coverage": float,
+       "timeline_feasibility": bool,
+       "resource_alignment": float
+   }
+   ```
+
+2. Gap Identification
+   ```python
+   {
+       "technical_gaps": List[str],
+       "timeline_gaps": List[str],
+       "resource_gaps": List[str]
+   }
+   ```
+
+#### Strategic Planning Node
+1. Action Planning
+   ```python
+   {
+       "immediate_actions": List[Dict],
+       "thirty_day_actions": List[Dict],
+       "sixty_day_actions": List[Dict],
+       "ninety_day_actions": List[Dict]
+   }
+   ```
+
+2. Resource Allocation
+   ```python
+   {
+       "proposal_schedule": List[Dict],
+       "event_schedule": List[Dict],
+       "partnership_strategy": List[Dict]
+   }
+   ```
+
+### 4. State Management
+
+#### Persistence Layer
+- Vector Store: FAISS with hierarchical indexes
+- Context Storage: JSON with provider metadata
+- Session Management: SQLite with state tracking
+
+#### Error Handling
+1. Retry Mechanisms
+   - Exponential backoff
+   - Maximum retry limits
+   - Error categorization
+
+2. State Recovery
+   - Checkpoint creation
+   - State restoration
+   - Context preservation
+
+## Implementation Notes
+
+### Embedding Configuration
+```yaml
+embeddings:
+  provider: "openai"  # or "gptj"
+  save_path: "path/to/embeddings"
+  openai:
+    model: "text-embedding-3-small"
+    dimension: 1536
+  gptj:
+    model_path: "path/to/model"
+    dimension: 4096
+```
+
+### Document Processing Parameters
+```yaml
+chunk_sizes:
+  high_level: 3000
+  mid_level: 1500
+  low_level: 500
+overlap_ratio: 0.1
+batch_size: 50
+```
+
+### System Requirements
+- Memory: Minimum 16GB RAM
+- Storage: 100GB+ SSD recommended
+- Python: 3.9+
+- Dependencies: See pyproject.toml
+
+### Performance Considerations
+- Batch processing for large document sets
+- Caching for frequently accessed embeddings
+- Concurrent processing where applicable
+- Resource cleanup after major operations
 
 ### Infrastructure Requirements
 
